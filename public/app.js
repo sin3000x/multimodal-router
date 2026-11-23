@@ -26,6 +26,8 @@ let currentRoutes = [];
 let currentEndpoints = { origin: null, destination: null };
 let activeRouteId = null;
 let activeLeg = null;
+let cardAnchor = null;
+let cardOpen = false;
 
 // Web Mercator coordinate helpers (mx in [0, 1), my in [0, 1])
 function clampLat(lat) {
@@ -490,14 +492,146 @@ function drawWorldMap(routes, highlightedId) {
     drawWaypointMarker(ctx, wp, x, y, activeColor, wp.id === hoveredWaypointId);
   }
   drawWaypointLabels(ctx, renderedMarkers, tokens, cssW, cssH);
+  positionRouteCard(ctx, cssW, cssH, activeColor);
 }
 
-function pointToSegmentDistanceSquared(x, y, [ax, ay], [bx, by]) {
+function closestPointOnSegment(x, y, [ax, ay], [bx, by]) {
   const dx = bx - ax;
   const dy = by - ay;
   const lengthSquared = dx * dx + dy * dy;
   const t = lengthSquared ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / lengthSquared)) : 0;
-  return (x - ax - t * dx) ** 2 + (y - ay - t * dy) ** 2;
+  return [ax + t * dx, ay + t * dy];
+}
+
+function clipMapSegment(a, b, width, height, x = 0, y = 0) {
+  let start = 0;
+  let end = 1;
+  const lower = [x, y];
+  const upper = [x + width, y + height];
+  for (let axis = 0; axis < 2; axis++) {
+    const delta = b[axis] - a[axis];
+    if (delta === 0) {
+      if (a[axis] < lower[axis] || a[axis] > upper[axis]) return null;
+      continue;
+    }
+    const entry = (lower[axis] - a[axis]) / delta;
+    const exit = (upper[axis] - a[axis]) / delta;
+    start = Math.max(start, Math.min(entry, exit));
+    end = Math.min(end, Math.max(entry, exit));
+    if (start > end) return null;
+  }
+  return [start, end].map((t) => [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]);
+}
+
+function routeCardAnchor(width, height) {
+  const inside = ([x, y]) => x >= 0 && x <= width && y >= 0 && y <= height;
+  if (cardAnchor) {
+    const [mx, my] = cardAnchor;
+    const point = projectRaw(nearestCopyMx(wrapUnit(mx)), my, width, height);
+    if (inside(point)) return point;
+  }
+
+  let anchor = null;
+  let bestScore = Infinity;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  for (const { route, leg, points } of renderedLegs) {
+    if (route.routeId !== activeRouteId) continue;
+    for (let i = 1; i < points.length; i++) {
+      const segment = clipMapSegment(points[i - 1], points[i], width, height);
+      if (!segment) continue;
+      const [x, y] = closestPointOnSegment(centerX, centerY, ...segment);
+      const focusPenalty = activeLeg && leg !== activeLeg ? width + height : 0;
+      const score = Math.hypot(x - centerX, y - centerY) + focusPenalty;
+      if (score < bestScore) {
+        anchor = [x, y];
+        bestScore = score;
+      }
+    }
+  }
+  if (anchor) return anchor;
+  const marker = renderedMarkers.find(({ x, y }) => inside([x, y]));
+  return marker ? [marker.x, marker.y] : null;
+}
+
+function cardIntersectsRoutes(x, y, width, height) {
+  const padding = 8;
+  const left = x - padding;
+  const right = x + width + padding;
+  const top = y - padding;
+  const bottom = y + height + padding;
+  for (const { points } of renderedLegs) {
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      if (Math.max(a[0], b[0]) < left || Math.min(a[0], b[0]) > right ||
+          Math.max(a[1], b[1]) < top || Math.min(a[1], b[1]) > bottom) continue;
+      if (clipMapSegment(a, b, right - left, bottom - top, left, top)) return true;
+    }
+  }
+  return false;
+}
+
+function positionRouteCard(ctx, width, height, color) {
+  const card = document.getElementById('map-route-card');
+  const stage = card.parentElement;
+  const docked = stage.classList.contains('route-card-docked');
+  const anchor = cardOpen ? routeCardAnchor(width, height) : null;
+  const visible = cardOpen && (anchor || docked);
+  card.classList.toggle('hidden', !visible);
+  if (!visible) return;
+
+  const [x, y] = anchor ?? [width, height / 2];
+  const { offsetWidth: cardWidth, offsetHeight: cardHeight } = card;
+  const controls = document.querySelector('.map-controls');
+  const minX = 8;
+  const minY = controls.offsetTop + controls.offsetHeight + 6;
+  const maxX = width - cardWidth - 8;
+  const maxY = height - cardHeight - 8;
+  const gap = 12;
+  const clampX = (value) => Math.max(minX, Math.min(maxX, value));
+  const clampY = (value) => Math.max(minY, Math.min(maxY, value));
+  const centeredX = clampX(x - cardWidth / 2);
+  const centeredY = clampY(y - cardHeight / 2);
+  let position = [width + 10, centeredY];
+  if (!docked) {
+    const candidates = [
+      [x + gap, centeredY], [x - cardWidth - gap, centeredY],
+      [centeredX, y + gap], [centeredX, y - cardHeight - gap],
+      [minX, centeredY], [maxX, centeredY], [centeredX, minY], [centeredX, maxY],
+      [minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY],
+    ];
+    position = candidates.find(([left, top]) => left >= minX && left <= maxX &&
+      top >= minY && top <= maxY && !cardIntersectsRoutes(left, top, cardWidth, cardHeight));
+    if (!position) {
+      stage.classList.add('route-card-docked');
+      clampView();
+      drawWorldMap(currentRoutes, activeRouteId);
+      return;
+    }
+  }
+
+  const [cardX, cardY] = position;
+  card.style.left = `${cardX + 1}px`;
+  card.style.top = `${cardY + 1}px`;
+  card.style.setProperty('--route-color', color);
+  if (!anchor) return;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.globalAlpha = 0.65;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(Math.max(cardX, Math.min(cardX + cardWidth, x)), Math.max(cardY, Math.min(cardY + cardHeight, y)));
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.beginPath();
+  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function mapTargetAt(x, y, pointerType) {
@@ -518,10 +652,11 @@ function mapTargetAt(x, y, pointerType) {
   for (let i = renderedLegs.length - 1; i >= 0; i--) {
     const item = renderedLegs[i];
     for (let j = 1; j < item.points.length; j++) {
-      const distance = pointToSegmentDistanceSquared(x, y, item.points[j - 1], item.points[j]);
+      const closest = closestPointOnSegment(x, y, item.points[j - 1], item.points[j]);
+      const distance = (x - closest[0]) ** 2 + (y - closest[1]) ** 2;
       if (distance < bestDistance) {
         bestDistance = distance;
-        target = item;
+        target = { ...item, anchor: closest };
       }
     }
   }
@@ -544,6 +679,8 @@ function clearMapHover() {
 function initMapInteractions() {
   const canvas = document.getElementById('world-map');
   const tooltip = document.getElementById('map-tooltip');
+  const panel = document.getElementById('map-panel');
+  const stage = panel.querySelector('.map-stage');
   let gesture = null;
 
   function cssPoint(e) {
@@ -551,10 +688,10 @@ function initMapInteractions() {
     return { x: e.clientX - rect.left - canvas.clientLeft, y: e.clientY - rect.top - canvas.clientTop };
   }
 
-  function showMapTarget(target, x, y, preview = true) {
+  function showMapTarget(target, x, y) {
     const waypoint = target?.wp;
     const nextWaypointId = waypoint?.id ?? null;
-    const nextLeg = preview && target?.leg ? target : null;
+    const nextLeg = target?.leg ? target : null;
     const changed = hoveredWaypointId !== nextWaypointId || hoveredLeg?.leg !== nextLeg?.leg;
     hoveredWaypointId = nextWaypointId;
     hoveredLeg = nextLeg;
@@ -643,9 +780,18 @@ function initMapInteractions() {
     finishGesture(e);
     if (!isTap) return;
     const target = mapTargetAt(x, y, e.pointerType);
-    if (target?.leg) selectRoute(target.route.routeId, target.leg);
-    else if (!target && activeLeg) selectRoute(activeRouteId);
-    showMapTarget(target?.wp || e.pointerType !== 'touch' ? target : null, x, y, false);
+    if (target?.leg) {
+      const [px, py] = target.anchor;
+      const worldPx = canvas.clientWidth * view.zoom;
+      const anchor = [
+        view.centerMx + (px - canvas.clientWidth / 2) / worldPx,
+        view.centerMy + (py - canvas.clientHeight / 2) / worldPx,
+      ];
+      selectRoute(target.route.routeId, target.leg, anchor);
+    } else if (!target && activeLeg && cardOpen) {
+      selectRoute(activeRouteId);
+    }
+    showMapTarget(target?.wp ? target : null, x, y);
   });
 
   canvas.addEventListener('pointercancel', finishGesture);
@@ -662,13 +808,15 @@ function initMapInteractions() {
     const m = getCanvasMetrics();
     if (m) zoomAt(1 / 1.5, m.cssW / 2, m.cssH / 2);
   };
-  document.getElementById('fit-route-btn').onclick = () => {
+  function fitSelectedRoute() {
     const active = currentRoutes.find((r) => r.routeId === activeRouteId);
     if (!active) return;
     fitRoutesToView([active]);
+    cardOpen = true;
     clearMapHover();
     drawWorldMap(currentRoutes, activeRouteId);
-  };
+  }
+  document.getElementById('fit-route-btn').onclick = fitSelectedRoute;
   document.getElementById('reset-zoom-btn').onclick = () => {
     view.zoom = 1;
     view.centerMx = 0.5;
@@ -678,11 +826,59 @@ function initMapInteractions() {
     drawWorldMap(currentRoutes, activeRouteId);
   };
 
+  const routeSelect = document.getElementById('route-select');
+  routeSelect.onchange = () => {
+    selectRoute(routeSelect.value);
+    if (document.getElementById('map-route-card').classList.contains('hidden')) {
+      fitSelectedRoute();
+    }
+  };
+  document.getElementById('close-route-card').onclick = () => {
+    cardOpen = false;
+    stage.classList.remove('route-card-docked');
+    resizeMap();
+    routeSelect.focus({ preventScroll: true });
+  };
+  document.getElementById('card-legs').ontoggle = () => drawWorldMap(currentRoutes, activeRouteId);
+
   function resizeMap() {
     clampView();
     clearMapHover();
     drawWorldMap(currentRoutes, activeRouteId);
   }
+
+  const fullscreen = document.getElementById('fullscreen-btn');
+  function updateFullscreen() {
+    const expanded = document.fullscreenElement === panel || panel.classList.contains('map-maximized');
+    fullscreen.textContent = expanded ? '退出全屏' : '全屏';
+    fullscreen.setAttribute('aria-pressed', String(expanded));
+    stage.classList.remove('route-card-docked');
+    resizeMap();
+  }
+
+  fullscreen.onclick = async () => {
+    if (document.fullscreenElement === panel) {
+      await document.exitFullscreen();
+    } else if (panel.classList.contains('map-maximized')) {
+      panel.classList.remove('map-maximized');
+      updateFullscreen();
+    } else {
+      try {
+        await panel.requestFullscreen();
+      } catch {
+        panel.classList.add('map-maximized');
+        updateFullscreen();
+      }
+    }
+  };
+  document.addEventListener('fullscreenchange', updateFullscreen);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && panel.classList.contains('map-maximized')) {
+      panel.classList.remove('map-maximized');
+      updateFullscreen();
+    }
+  });
+
   if (typeof ResizeObserver !== 'undefined') {
     const observer = new ResizeObserver(resizeMap);
     observer.observe(canvas);
@@ -699,33 +895,64 @@ function selectedAvoid() {
   return [...document.querySelectorAll('input[name="avoid"]:checked')].map((el) => el.value);
 }
 
-function selectRoute(routeId, leg = null) {
+function selectRoute(routeId, leg = null, anchor = null) {
   activeRouteId = routeId;
   activeLeg = leg;
+  cardAnchor = anchor;
   clearMapHover();
-  for (const card of document.querySelectorAll('.route-card')) {
-    const selected = card.dataset.routeId === activeRouteId;
-    card.classList.toggle('active', selected);
-    card.setAttribute('aria-pressed', String(selected));
-  }
 
   const route = currentRoutes.find((r) => r.routeId === activeRouteId);
-  const selection = document.getElementById('map-selection');
-  selection.classList.toggle('hidden', !route);
+  cardOpen = Boolean(route);
   document.getElementById('fit-route-btn').disabled = !route;
-  document.getElementById('map-selection-text').textContent = leg
-    ? legSummary(leg)
-    : route
-      ? `${route.modeLabel} · ${route.originGateway.name} → ${route.destGateway.name} · ${route.metrics.distanceKm} km · ${route.metrics.transitDays} 天`
-      : '';
+  if (route) {
+    document.getElementById('route-select').value = route.routeId;
+    renderRouteCard(route, leg);
+  }
   drawWorldMap(currentRoutes, activeRouteId);
+}
+
+function renderRouteCard(route, leg) {
+  const byId = (id) => document.getElementById(id);
+  const via = route.viaHub ? ` → ${route.viaHub.code || route.viaHub.name}` : '';
+  const likelihood = route.likelihood === 'primary' ? '主要方案' : '备选方案';
+  byId('card-mode').textContent = route.modeLabel;
+  byId('card-likelihood').textContent = route.detourReason ? `${likelihood} · ${route.detourReason}` : likelihood;
+  byId('card-gateways').textContent = `${route.originGateway.name} (${route.originGateway.id})${via} → ${route.destGateway.name} (${route.destGateway.id})`;
+  byId('card-leg').textContent = leg ? legSummary(leg) : '';
+  byId('card-leg').classList.toggle('hidden', !leg);
+  byId('card-distance').textContent = `${route.metrics.distanceKm} km`;
+  byId('card-time').textContent = `${route.metrics.transitDays} 天`;
+  byId('card-cost').textContent = route.metrics.costIndex;
+
+  const chips = route.chokepoints.map((cp) => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.textContent = cp.name_zh;
+    return chip;
+  });
+  if (route.deltaDays != null) {
+    const delta = document.createElement('span');
+    delta.className = 'chip delta';
+    const sign = route.deltaDays >= 0 ? '+' : '';
+    delta.textContent = `${sign}${route.deltaDays} 天 · ${route.costMultiplier}x 成本`;
+    chips.push(delta);
+  }
+  byId('card-chips').replaceChildren(...chips);
+  byId('card-chips').classList.toggle('hidden', !chips.length);
+
+  const legs = route.legs.map((item) => {
+    const row = document.createElement('li');
+    row.textContent = legSummary(item);
+    return row;
+  });
+  byId('card-leg-list').replaceChildren(...legs);
+  byId('card-legs').open = false;
+  byId('card-legs').classList.toggle('hidden', !legs.length);
+  byId('map-route-card').scrollTop = 0;
 }
 
 function renderRoutes(routes, { compareData = null } = {}) {
   currentRoutes = routes;
-
-  const grid = document.getElementById('routes-grid');
-  grid.innerHTML = '';
 
   const banner = document.getElementById('impact-banner');
   if (compareData?.impactSummary) {
@@ -738,50 +965,16 @@ function renderRoutes(routes, { compareData = null } = {}) {
     banner.classList.add('hidden');
   }
 
-  for (const r of routes) {
-    const card = document.createElement('div');
-    card.className = 'route-card';
-    card.dataset.routeId = r.routeId;
-    card.setAttribute('role', 'button');
-    card.tabIndex = 0;
-    card.onclick = () => selectRoute(r.routeId);
-    card.onkeydown = (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        card.click();
-      }
-    };
+  const options = routes.map((route) => {
+    const via = route.viaHub?.code || route.viaHub?.name;
+    const distinguishingStops = via || route.chokepoints.map((cp) => cp.name_zh).join('、');
+    const name = [route.modeLabel, distinguishingStops, `${route.metrics.transitDays} 天`].filter(Boolean).join(' · ');
+    return new Option(name, route.routeId);
+  });
+  document.getElementById('route-select').replaceChildren(...options);
+  document.getElementById('route-picker').classList.toggle('hidden', !options.length);
 
-    const via = r.viaHub ? ` → ${r.viaHub.code || r.viaHub.name}` : '';
-    const cpHtml = r.chokepoints.length
-      ? r.chokepoints.map((c) => `<span class="chip">${c.name_zh}</span>`).join('')
-      : '<span class="chip">无关键咽喉</span>';
-    const deltaHtml =
-      r.deltaDays != null
-        ? `<span class="chip delta">${r.deltaDays >= 0 ? '+' : ''}${r.deltaDays}天 · ${r.costMultiplier}x成本</span>`
-        : '';
-
-    const legsHtml = r.legs
-      .map((l) => `<div>${l.mode.toUpperCase()} · ${l.fromName} → ${l.toName} (${l.distanceKm} km)</div>`)
-      .join('');
-
-    card.innerHTML = `
-      <div class="card-head">
-        <span class="mode-tag mode-${r.mode}">${r.modeLabel}</span>
-        <span class="likelihood">${r.likelihood === 'primary' ? '主要方案' : '备选方案'}${r.detourReason ? ' · ' + r.detourReason : ''}</span>
-      </div>
-      <div class="gateways">${r.originGateway.name} (${r.originGateway.id})${via} → ${r.destGateway.name} (${r.destGateway.id})</div>
-      <div class="metrics">
-        <div class="metric"><span>总里程</span><strong>${r.metrics.distanceKm} km</strong></div>
-        <div class="metric"><span>预计时效</span><strong>${r.metrics.transitDays} 天</strong></div>
-        <div class="metric"><span>成本指数</span><strong>${r.metrics.costIndex}</strong></div>
-      </div>
-      <div class="cp-chips">${cpHtml}${deltaHtml}</div>
-      <div class="legs">${legsHtml}</div>
-    `;
-    grid.appendChild(card);
-  }
-
+  document.querySelector('.map-stage').classList.remove('route-card-docked');
   fitRoutesToView(routes);
   selectRoute(routes[0]?.routeId ?? null);
 }
