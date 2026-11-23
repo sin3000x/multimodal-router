@@ -257,8 +257,9 @@ body {
 
 #world-map {
   width: 100%;
-  aspect-ratio: 1200 / 540;
-  min-height: 260px;
+  height: 440px;
+  min-height: 320px;
+  max-height: 58vh;
   background: var(--map-ocean);
   border: 1px solid var(--panel-border);
   border-radius: 8px;

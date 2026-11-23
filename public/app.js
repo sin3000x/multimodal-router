@@ -25,8 +25,27 @@ let currentRoutes = [];
 let currentEndpoints = { origin: null, destination: null };
 let activeRouteId = null;
 
-// Interactive map viewport state
-const view = { zoom: 1, centerLon: 0, centerLat: 0 };
+// Web Mercator coordinate helpers (mx in [0, 1), my in [0, 1])
+function clampLat(lat) {
+  return Math.max(-80, Math.min(83, lat));
+}
+
+function lonToMx(lon) {
+  const norm = ((lon + 180) % 360 + 360) % 360;
+  return norm / 360;
+}
+
+function latToMy(lat) {
+  const rad = (clampLat(lat) * Math.PI) / 180;
+  const sin = Math.sin(rad);
+  const y = 0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI);
+  return Math.max(0, Math.min(1, y));
+}
+
+const DEFAULT_CENTER_MY = latToMy(20);
+
+// Interactive map viewport state (isotropic Web Mercator)
+const view = { zoom: 1, centerMx: 0.5, centerMy: DEFAULT_CENTER_MY };
 let renderedMarkers = [];
 let hoveredWaypointId = null;
 
@@ -81,39 +100,63 @@ function initTheme() {
   });
 }
 
-function normLon(lon) {
-  let n = ((lon + 180) % 360 + 360) % 360 - 180;
-  if (n >= 180) n = -180;
-  return n;
+function getCanvasMetrics() {
+  const canvas = document.getElementById('world-map');
+  if (!canvas) return null;
+  const cssW = Math.max(300, Math.round(canvas.clientWidth || 900));
+  const cssH = Math.max(260, Math.round(canvas.clientHeight || 440));
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  return { canvas, cssW, cssH, dpr };
+}
+
+function syncCanvasSize() {
+  const m = getCanvasMetrics();
+  if (!m) return null;
+  const targetW = Math.round(m.cssW * m.dpr);
+  const targetH = Math.round(m.cssH * m.dpr);
+  if (m.canvas.width !== targetW || m.canvas.height !== targetH) {
+    m.canvas.width = targetW;
+    m.canvas.height = targetH;
+  }
+  return m;
+}
+
+function wrapUnit(u) {
+  return ((u % 1) + 1) % 1;
 }
 
 function clampView() {
   view.zoom = Math.max(1, Math.min(12, view.zoom));
+  view.centerMx = wrapUnit(view.centerMx);
+  const m = getCanvasMetrics();
+  const aspectRatio = m ? m.cssH / m.cssW : 0.48;
+  const halfMySpan = Math.min(0.49, (aspectRatio / view.zoom) * 0.5);
+  const minMy = Math.max(latToMy(82), halfMySpan * 0.7);
+  const maxMy = Math.min(latToMy(-76), 1 - halfMySpan * 0.7);
   if (view.zoom <= 1.01) {
     view.zoom = 1;
-    view.centerLon = 0;
-    view.centerLat = 0;
+    view.centerMx = 0.5;
+    view.centerMy = Math.max(minMy, Math.min(maxMy, DEFAULT_CENTER_MY));
   } else {
-    view.centerLon = normLon(view.centerLon);
-    const halfLat = 90 / view.zoom;
-    view.centerLat = Math.max(-90 + halfLat, Math.min(90 - halfLat, view.centerLat));
+    view.centerMy = Math.max(minMy, Math.min(maxMy, view.centerMy));
   }
   const badge = document.getElementById('zoom-level');
   if (badge) badge.textContent = `${view.zoom.toFixed(1)}x`;
 }
 
-function projectRaw(lon, lat, width, height) {
-  const x = width / 2 + (lon - view.centerLon) * (width / 360) * view.zoom;
-  const y = height / 2 - (lat - view.centerLat) * (height / 180) * view.zoom;
+function projectRaw(mx, my, cssW, cssH) {
+  const worldPx = cssW * view.zoom;
+  const x = cssW / 2 + (mx - view.centerMx) * worldPx;
+  const y = cssH / 2 + (my - view.centerMy) * worldPx;
   return [x, y];
 }
 
-function nearestCopyLon(lon) {
-  const candidates = [lon - 360, lon, lon + 360];
-  let best = lon;
+function nearestCopyMx(mx) {
+  const candidates = [mx - 1, mx, mx + 1];
+  let best = mx;
   let bestDist = Infinity;
   for (const c of candidates) {
-    const d = Math.abs(c - view.centerLon);
+    const d = Math.abs(c - view.centerMx);
     if (d < bestDist) {
       bestDist = d;
       best = c;
@@ -122,21 +165,24 @@ function nearestCopyLon(lon) {
   return best;
 }
 
-function unwrapCoords(coords) {
+function unwrapMxs(coords) {
   if (!coords.length) return [];
-  const out = [[coords[0][0], coords[0][1]]];
+  const out = [[lonToMx(coords[0][0]), latToMy(coords[0][1])]];
   for (let i = 1; i < coords.length; i++) {
-    let lon = coords[i][0];
-    const prevLon = out[i - 1][0];
-    while (lon - prevLon > 180) lon -= 360;
-    while (lon - prevLon < -180) lon += 360;
-    out.push([lon, coords[i][1]]);
+    let mx = lonToMx(coords[i][0]);
+    const prevMx = out[i - 1][0];
+    while (mx - prevMx > 0.5) mx -= 1;
+    while (mx - prevMx < -0.5) mx += 1;
+    out.push([mx, latToMy(coords[i][1])]);
   }
   return out;
 }
 
 function fitRouteToView(route) {
   if (!route) return;
+  const m = getCanvasMetrics();
+  if (!m) return;
+
   const rawPts = [];
   for (const leg of route.legs || []) {
     for (const pt of leg.geometry || []) rawPts.push(pt);
@@ -144,33 +190,34 @@ function fitRouteToView(route) {
   for (const wp of route.waypoints || []) rawPts.push([wp.lon, wp.lat]);
   if (!rawPts.length) return;
 
-  // Choose the longitudinal span that avoids wrapping across the globe
-  const sortedLons = [...new Set(rawPts.map((p) => normLon(p[0])))].sort((a, b) => a - b);
+  const sortedMxs = [...new Set(rawPts.map((p) => +lonToMx(p[0]).toFixed(5)))].sort((a, b) => a - b);
   let maxGap = -1;
   let gapStartIdx = 0;
-  for (let i = 0; i < sortedLons.length; i++) {
-    const next = i + 1 < sortedLons.length ? sortedLons[i + 1] : sortedLons[0] + 360;
-    const gap = next - sortedLons[i];
+  for (let i = 0; i < sortedMxs.length; i++) {
+    const next = i + 1 < sortedMxs.length ? sortedMxs[i + 1] : sortedMxs[0] + 1;
+    const gap = next - sortedMxs[i];
     if (gap > maxGap) {
       maxGap = gap;
       gapStartIdx = i;
     }
   }
-  const minLon = sortedLons[(gapStartIdx + 1) % sortedLons.length];
-  let maxLon = sortedLons[gapStartIdx];
-  if (maxLon < minLon) maxLon += 360;
-  const lonSpan = sortedLons.length === 1 ? 10 : Math.max(10, maxLon - minLon);
+  const minMx = sortedMxs[(gapStartIdx + 1) % sortedMxs.length];
+  let maxMx = sortedMxs[gapStartIdx];
+  if (maxMx < minMx) maxMx += 1;
+  const mxSpan = sortedMxs.length === 1 ? 0.04 : Math.max(0.04, maxMx - minMx);
 
-  const lats = rawPts.map((p) => p[1]);
-  const minLat = Math.min(...lats);
-  const maxLat = Math.max(...lats);
-  const latSpan = Math.max(8, maxLat - minLat);
+  const mys = rawPts.map((p) => latToMy(p[1]));
+  const minMy = Math.min(...mys);
+  const maxMy = Math.max(...mys);
+  const mySpan = Math.max(0.03, maxMy - minMy);
 
-  view.centerLon = normLon((minLon + maxLon) / 2);
-  view.centerLat = (minLat + maxLat) / 2;
-  const zx = 310 / lonSpan;
-  const zy = 145 / latSpan;
-  view.zoom = Math.max(1.2, Math.min(7.5, Math.min(zx, zy)));
+  view.centerMx = wrapUnit((minMx + maxMx) / 2);
+  view.centerMy = (minMy + maxMy) / 2;
+
+  const aspect = m.cssH / m.cssW;
+  const zx = 0.8 / mxSpan;
+  const zy = (0.76 * aspect) / mySpan;
+  view.zoom = Math.max(1.1, Math.min(9.0, Math.min(zx, zy)));
   clampView();
   drawWorldMap(currentRoutes, activeRouteId);
 }
@@ -198,14 +245,14 @@ function drawWaypointMarker(ctx, wp, x, y, modeColor, isHovered) {
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(x, y, isHovered ? 7 : 5.8, 0, Math.PI * 2);
+    ctx.arc(x, y, isHovered ? 7 : 5.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   } else if (wp.role === 'chokepoint' || wp.role === 'border' || wp.role === 'hub') {
     const r = isHovered ? 6 : 4.5;
     ctx.fillStyle = wp.role === 'chokepoint' ? '#f59e0b' : '#10b981';
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(x, y - r);
     ctx.lineTo(x + r, y);
@@ -217,39 +264,39 @@ function drawWaypointMarker(ctx, wp, x, y, modeColor, isHovered) {
   } else {
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = modeColor;
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(x, y, isHovered ? 5.5 : 4.2, 0, Math.PI * 2);
+    ctx.arc(x, y, isHovered ? 5.5 : 4, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
   ctx.restore();
 }
 
-function drawWaypointLabels(ctx, items, tokens) {
-  const w = ctx.canvas.width;
-  const h = ctx.canvas.height;
+function drawWaypointLabels(ctx, items, tokens, cssW, cssH) {
   const placed = [];
-
   const priority = { origin: 0, destination: 0, chokepoint: 1, border: 2, gateway: 3, hub: 4 };
   const sorted = [...items].sort(
     (a, b) => (priority[a.wp.role] ?? 5) - (priority[b.wp.role] ?? 5)
   );
 
   ctx.save();
-  ctx.font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.font = '600 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   ctx.textBaseline = 'middle';
 
   for (const item of sorted) {
     const { wp, x, y } = item;
-    if (x < -10 || x > w + 10 || y < -10 || y > h + 10) continue;
+    if (x < -10 || x > cssW + 10 || y < -10 || y > cssH + 10) continue;
 
-    const showCode = wp.role === 'origin' || wp.role === 'destination' || (wp.role === 'gateway' && view.zoom >= 1.8);
+    const showCode =
+      wp.role === 'origin' ||
+      wp.role === 'destination' ||
+      (wp.role === 'gateway' && view.zoom >= 1.8);
     const label = showCode && wp.id !== wp.name_zh ? `${wp.name_zh} (${wp.id})` : wp.name_zh;
     const textW = ctx.measureText(label).width;
     const padX = 6;
     const boxW = textW + padX * 2;
-    const boxH = 20;
+    const boxH = 19;
 
     const offsets = [
       [10, -boxH / 2],
@@ -261,7 +308,7 @@ function drawWaypointLabels(ctx, items, tokens) {
     let chosen = null;
     for (const [dx, dy] of offsets) {
       const box = { x: x + dx, y: y + dy, w: boxW, h: boxH };
-      if (box.x < 4 || box.x + box.w > w - 4 || box.y < 4 || box.y + box.h > h - 4) continue;
+      if (box.x < 4 || box.x + box.w > cssW - 4 || box.y < 4 || box.y + box.h > cssH - 4) continue;
       if (!placed.some((p) => boxesOverlap(box, p, 4))) {
         chosen = box;
         break;
@@ -270,8 +317,8 @@ function drawWaypointLabels(ctx, items, tokens) {
 
     if (!chosen && (wp.role === 'origin' || wp.role === 'destination')) {
       chosen = {
-        x: Math.max(4, Math.min(w - boxW - 4, x + 10)),
-        y: Math.max(4, Math.min(h - boxH - 4, y - boxH / 2)),
+        x: Math.max(4, Math.min(cssW - boxW - 4, x + 10)),
+        y: Math.max(4, Math.min(cssH - boxH - 4, y - boxH / 2)),
         w: boxW,
         h: boxH,
       };
@@ -294,48 +341,48 @@ function drawWaypointLabels(ctx, items, tokens) {
 }
 
 function drawWorldMap(routes, highlightedId) {
-  const canvas = document.getElementById('world-map');
-  if (!canvas) return;
+  const m = syncCanvasSize();
+  if (!m) return;
+  const { canvas, cssW, cssH, dpr } = m;
   const ctx = canvas.getContext('2d');
-  const w = canvas.width;
-  const h = canvas.height;
   const tokens = getCssTokens();
 
-  ctx.clearRect(0, 0, w, h);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
   ctx.fillStyle = tokens.ocean;
-  ctx.fillRect(0, 0, w, h);
+  ctx.fillRect(0, 0, cssW, cssH);
 
   // Graticule across wrapped world copies
   ctx.strokeStyle = tokens.grid;
   ctx.lineWidth = 1;
-  for (const offset of [-360, 0, 360]) {
+  for (const mxOffset of [-1, 0, 1]) {
     for (let lon = -150; lon <= 150; lon += 30) {
-      const [x] = projectRaw(lon + offset, 0, w, h);
-      if (x < 0 || x > w) continue;
+      const [x] = projectRaw(lonToMx(lon) + mxOffset, 0.5, cssW, cssH);
+      if (x < 0 || x > cssW) continue;
       ctx.beginPath();
       ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
+      ctx.lineTo(x, cssH);
       ctx.stroke();
     }
   }
   for (let lat = -60; lat <= 60; lat += 30) {
-    const [, y] = projectRaw(0, lat, w, h);
-    if (y < 0 || y > h) continue;
+    const [, y] = projectRaw(0.5, latToMy(lat), cssW, cssH);
+    if (y < 0 || y > cssH) continue;
     ctx.beginPath();
     ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
+    ctx.lineTo(cssW, y);
     ctx.stroke();
   }
 
-  // Land polygons (drawn at -360, 0, +360 so panning/crossing antimeridian never tears coastlines)
+  // Land polygons in Web Mercator (drawn at mxOffset -1, 0, +1 for seamless panning & antimeridian)
   if (worldGeo?.features) {
     ctx.fillStyle = tokens.land;
     ctx.strokeStyle = tokens.coast;
-    ctx.lineWidth = 0.9;
-    for (const offset of [-360, 0, 360]) {
-      const [leftX] = projectRaw(offset - 180, 0, w, h);
-      const [rightX] = projectRaw(offset + 180, 0, w, h);
-      if (rightX < 0 || leftX > w) continue;
+    ctx.lineWidth = 0.8;
+    for (const mxOffset of [-1, 0, 1]) {
+      const [leftX] = projectRaw(mxOffset, 0.5, cssW, cssH);
+      const [rightX] = projectRaw(mxOffset + 1, 0.5, cssW, cssH);
+      if (rightX < 0 || leftX > cssW) continue;
 
       for (const f of worldGeo.features) {
         const rings =
@@ -348,7 +395,9 @@ function drawWorldMap(routes, highlightedId) {
           if (!ring?.length) continue;
           ctx.beginPath();
           ring.forEach((pt, idx) => {
-            const [x, y] = projectRaw(pt[0] + offset, pt[1], w, h);
+            const mx = (pt[0] + 180) / 360 + mxOffset;
+            const my = latToMy(pt[1]);
+            const [x, y] = projectRaw(mx, my, cssW, cssH);
             if (idx === 0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
           });
@@ -371,23 +420,23 @@ function drawWorldMap(routes, highlightedId) {
     const color = tokens.modes[route.mode] || tokens.modes.sea;
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.globalAlpha = isDimmed ? 0.22 : isSelected ? 0.98 : 0.8;
-    ctx.lineWidth = isSelected ? 3.2 : 1.8;
+    ctx.globalAlpha = isDimmed ? 0.24 : isSelected ? 0.98 : 0.8;
+    ctx.lineWidth = isSelected ? 2.8 : 1.5;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    if (route.mode === 'air') ctx.setLineDash([7, 5]);
-    else if (route.mode === 'rail') ctx.setLineDash([3, 4]);
+    if (route.mode === 'air') ctx.setLineDash([6, 4]);
+    else if (route.mode === 'rail') ctx.setLineDash([3, 3.5]);
 
     for (const leg of route.legs || []) {
-      const unwrapped = unwrapCoords(leg.geometry || []);
+      const unwrapped = unwrapMxs(leg.geometry || []);
       if (unwrapped.length < 2) continue;
-      const midLon = unwrapped[Math.floor(unwrapped.length / 2)][0];
-      const baseShift = nearestCopyLon(midLon) - midLon;
+      const midMx = unwrapped[Math.floor(unwrapped.length / 2)][0];
+      const baseShift = nearestCopyMx(midMx) - midMx;
 
-      for (const extraShift of [baseShift - 360, baseShift, baseShift + 360]) {
+      for (const extraShift of [baseShift - 1, baseShift, baseShift + 1]) {
         ctx.beginPath();
         for (let i = 0; i < unwrapped.length; i++) {
-          const [x, y] = projectRaw(unwrapped[i][0] + extraShift, unwrapped[i][1], w, h);
+          const [x, y] = projectRaw(unwrapped[i][0] + extraShift, unwrapped[i][1], cssW, cssH);
           if (i === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
@@ -410,12 +459,12 @@ function drawWorldMap(routes, highlightedId) {
   const activeColor = tokens.modes[activeRoute?.mode] || tokens.modes.sea;
   renderedMarkers = [];
   for (const wp of waypoints) {
-    const lonCopy = nearestCopyLon(wp.lon);
-    const [x, y] = projectRaw(lonCopy, wp.lat, w, h);
+    const mxCopy = nearestCopyMx(lonToMx(wp.lon));
+    const [x, y] = projectRaw(mxCopy, latToMy(wp.lat), cssW, cssH);
     renderedMarkers.push({ wp, x, y });
     drawWaypointMarker(ctx, wp, x, y, activeColor, wp.id === hoveredWaypointId);
   }
-  drawWaypointLabels(ctx, renderedMarkers, tokens);
+  drawWaypointLabels(ctx, renderedMarkers, tokens, cssW, cssH);
 }
 
 function initMapInteractions() {
@@ -426,24 +475,27 @@ function initMapInteractions() {
   let dragging = false;
   let dragStart = null;
 
-  function canvasPoint(e) {
+  function cssPoint(e) {
     const rect = canvas.getBoundingClientRect();
     return {
-      cx: ((e.clientX - rect.left) / rect.width) * canvas.width,
-      cy: ((e.clientY - rect.top) / rect.height) * canvas.height,
-      cssX: e.clientX - rect.left,
-      cssY: e.clientY - rect.top,
+      cx: e.clientX - rect.left,
+      cy: e.clientY - rect.top,
+      cssW: rect.width,
+      cssH: rect.height,
     };
   }
 
   function zoomAt(factor, cx, cy) {
-    const oldZoom = view.zoom;
-    const lonUnder = view.centerLon + ((cx - canvas.width / 2) / (canvas.width * oldZoom)) * 360;
-    const latUnder = view.centerLat - ((cy - canvas.height / 2) / (canvas.height * oldZoom)) * 180;
+    const m = getCanvasMetrics();
+    if (!m) return;
+    const oldWorldPx = m.cssW * view.zoom;
+    const mxUnder = view.centerMx + (cx - m.cssW / 2) / oldWorldPx;
+    const myUnder = view.centerMy + (cy - m.cssH / 2) / oldWorldPx;
 
-    view.zoom = Math.max(1, Math.min(12, oldZoom * factor));
-    view.centerLon = lonUnder - ((cx - canvas.width / 2) / (canvas.width * view.zoom)) * 360;
-    view.centerLat = latUnder + ((cy - canvas.height / 2) / (canvas.height * view.zoom)) * 180;
+    view.zoom = Math.max(1, Math.min(12, view.zoom * factor));
+    const newWorldPx = m.cssW * view.zoom;
+    view.centerMx = mxUnder - (cx - m.cssW / 2) / newWorldPx;
+    view.centerMy = myUnder - (cy - m.cssH / 2) / newWorldPx;
     clampView();
     drawWorldMap(currentRoutes, activeRouteId);
   }
@@ -452,7 +504,7 @@ function initMapInteractions() {
     'wheel',
     (e) => {
       e.preventDefault();
-      const { cx, cy } = canvasPoint(e);
+      const { cx, cy } = cssPoint(e);
       const factor = e.deltaY < 0 ? 1.25 : 0.8;
       zoomAt(factor, cx, cy);
     },
@@ -460,7 +512,7 @@ function initMapInteractions() {
   );
 
   canvas.addEventListener('dblclick', (e) => {
-    const { cx, cy } = canvasPoint(e);
+    const { cx, cy } = cssPoint(e);
     zoomAt(1.6, cx, cy);
   });
 
@@ -470,18 +522,20 @@ function initMapInteractions() {
     dragStart = {
       x: e.clientX,
       y: e.clientY,
-      centerLon: view.centerLon,
-      centerLat: view.centerLat,
+      centerMx: view.centerMx,
+      centerMy: view.centerMy,
     };
   });
 
   window.addEventListener('mousemove', (e) => {
     if (dragging && dragStart) {
-      const rect = canvas.getBoundingClientRect();
+      const m = getCanvasMetrics();
+      if (!m) return;
+      const worldPx = m.cssW * view.zoom;
       const dx = e.clientX - dragStart.x;
       const dy = e.clientY - dragStart.y;
-      view.centerLon = dragStart.centerLon - (dx / (rect.width * view.zoom)) * 360;
-      view.centerLat = dragStart.centerLat + (dy / (rect.height * view.zoom)) * 180;
+      view.centerMx = dragStart.centerMx - dx / worldPx;
+      view.centerMy = dragStart.centerMy - dy / worldPx;
       clampView();
       drawWorldMap(currentRoutes, activeRouteId);
       return;
@@ -496,7 +550,7 @@ function initMapInteractions() {
       return;
     }
 
-    const { cx, cy, cssX, cssY } = canvasPoint(e);
+    const { cx, cy, cssW } = cssPoint(e);
     let nearest = null;
     let bestDist = 14;
     for (const item of renderedMarkers) {
@@ -516,8 +570,8 @@ function initMapInteractions() {
     if (nearest && tooltip) {
       const roleText = ROLE_LABELS[nearest.wp.role] || nearest.wp.type;
       tooltip.textContent = `${nearest.wp.name_zh} (${nearest.wp.id}) · ${roleText}`;
-      tooltip.style.left = `${Math.min(canvas.clientWidth - 180, Math.max(8, cssX + 12))}px`;
-      tooltip.style.top = `${Math.max(8, cssY - 28)}px`;
+      tooltip.style.left = `${Math.min(cssW - 180, Math.max(8, cx + 12))}px`;
+      tooltip.style.top = `${Math.max(8, cy - 28)}px`;
       tooltip.classList.remove('hidden');
       canvas.style.cursor = 'pointer';
     } else if (tooltip) {
@@ -533,21 +587,37 @@ function initMapInteractions() {
     canvas.classList.remove('dragging');
   });
 
-  document.getElementById('zoom-in-btn').onclick = () =>
-    zoomAt(1.5, canvas.width / 2, canvas.height / 2);
-  document.getElementById('zoom-out-btn').onclick = () =>
-    zoomAt(1 / 1.5, canvas.width / 2, canvas.height / 2);
+  document.getElementById('zoom-in-btn').onclick = () => {
+    const m = getCanvasMetrics();
+    if (m) zoomAt(1.5, m.cssW / 2, m.cssH / 2);
+  };
+  document.getElementById('zoom-out-btn').onclick = () => {
+    const m = getCanvasMetrics();
+    if (m) zoomAt(1 / 1.5, m.cssW / 2, m.cssH / 2);
+  };
   document.getElementById('fit-route-btn').onclick = () => {
     const active = currentRoutes.find((r) => r.routeId === activeRouteId) ?? currentRoutes[0];
     fitRouteToView(active);
   };
   document.getElementById('reset-zoom-btn').onclick = () => {
     view.zoom = 1;
-    view.centerLon = 0;
-    view.centerLat = 0;
+    view.centerMx = 0.5;
+    view.centerMy = DEFAULT_CENTER_MY;
     clampView();
     drawWorldMap(currentRoutes, activeRouteId);
   };
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(() => {
+      clampView();
+      drawWorldMap(currentRoutes, activeRouteId);
+    });
+    observer.observe(canvas);
+  }
+  window.addEventListener('resize', () => {
+    clampView();
+    drawWorldMap(currentRoutes, activeRouteId);
+  });
 }
 
 function selectedModes() {
@@ -656,6 +726,7 @@ async function refreshHealth() {
 async function init() {
   initTheme();
   initMapInteractions();
+  clampView();
 
   fetchJson('/countries.geojson')
     .then((geo) => {
