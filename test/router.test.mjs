@@ -27,6 +27,11 @@ test('Node IDs reuse ISO-3166-1, IATA, and UN/LOCODE standard codes without synt
   assert.equal(router.resolveNode('PORT_YANTIAN')?.id, 'CNYTN');
   assert.equal(router.resolveNode('AP_SZX')?.id, 'SZX');
   assert.equal(router.resolveNode('RAIL_DUISBURG')?.id, 'DEDUI');
+
+  // Decoupled clean geographic names
+  assert.equal(router.resolveNode('CP_CAPE')?.name_zh, '好望角');
+  assert.equal(router.resolveNode('AS_MIDEAST')?.name_zh, '中东空域');
+  assert.equal(router.resolveNode('CNALA')?.name_zh, '阿拉山口');
 });
 
 test('CNSZX -> NLAMS returns Suez sea, Cape sea detour, air, and China-Europe rail', () => {
@@ -65,6 +70,10 @@ test('CNSZX -> NLAMS returns Suez sea, Cape sea detour, air, and China-Europe ra
     'should include China-Europe rail via CNALA or RB_KHORGOS'
   );
   assert.ok(seaRoutes[0].legs.every((l) => Array.isArray(l.geometry) && l.geometry.length >= 2));
+  assert.ok(Array.isArray(seaRoutes[0].waypoints) && seaRoutes[0].waypoints.length >= 4);
+  assert.equal(seaRoutes[0].waypoints[0].role, 'origin');
+  assert.equal(seaRoutes[0].waypoints[seaRoutes[0].waypoints.length - 1].role, 'destination');
+  assert.ok(seaRoutes[0].waypoints.some((w) => w.role === 'chokepoint' && w.id === 'CP_SUEZ'));
 });
 
 test('CNSZX -> AEDXB with avoid CP_HORMUZ uses bypass port outside Hormuz and reports comparison', () => {

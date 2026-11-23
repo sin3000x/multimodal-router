@@ -64,13 +64,13 @@
       "id": "CP_CAPE",
       "marnetPassage": "south_africa",
       "type": "chokepoint",
-      "name_zh": "好望角（绕行）",
+      "name_zh": "好望角",
       "name_en": "Cape of Good Hope",
       "lon": 18.47,
       "lat": -34.36,
       "major": true,
       "region": "southernAfrica",
-      "aliases": ["Cape of Good Hope", "Cape route"]
+      "aliases": ["Cape of Good Hope", "Cape route", "好望角（绕行）"]
     },
     {
       "id": "CP_GIBRALTAR",
@@ -148,8 +148,8 @@
       "id": "CP_MAGELLAN",
       "marnetPassage": "chili",
       "type": "chokepoint",
-      "name_zh": "麦哲伦海峡/合恩角",
-      "name_en": "Magellan / Cape Horn",
+      "name_zh": "麦哲伦海峡",
+      "name_en": "Strait of Magellan",
       "lon": -70.0,
       "lat": -55.0,
       "major": false,
@@ -178,7 +178,7 @@
     {
       "id": "AS_MIDEAST",
       "type": "airspace",
-      "name_zh": "中东空域（海湾/伊朗/伊拉克/红海上空）",
+      "name_zh": "中东空域",
       "name_en": "Middle East airspace",
       "lon": 46.0,
       "lat": 28.0,

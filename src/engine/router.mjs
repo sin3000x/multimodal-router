@@ -170,6 +170,40 @@ export function createRouter(compiledGraph) {
     return out;
   }
 
+  function waypointRole(node, index, lastIndex) {
+    if (index === 0) return 'origin';
+    if (index === lastIndex) return 'destination';
+    if (node.type === 'chokepoint' || node.type === 'airspace' || node.type === 'sea_area') {
+      return 'chokepoint';
+    }
+    if (node.type === 'rail_border' || node.type === 'border') return 'border';
+    if (node.type === 'port' || node.type === 'airport' || node.type === 'hub_airport') return 'gateway';
+    return 'hub';
+  }
+
+  function buildWaypoints(nodeSequence, originNode, destNode) {
+    const resolved = [];
+    const seen = new Set();
+    for (const id of nodeSequence ?? []) {
+      if (seen.has(id)) continue;
+      const node =
+        id === originNode.id ? originNode : id === destNode.id ? destNode : nodeById.get(id);
+      if (!node || !Number.isFinite(node.lon) || !Number.isFinite(node.lat)) continue;
+      seen.add(id);
+      resolved.push(node);
+    }
+    const lastIdx = resolved.length - 1;
+    return resolved.map((node, idx) => ({
+      id: node.id,
+      type: node.type,
+      name_zh: node.name_zh || node.name_en || node.id,
+      name_en: node.name_en || node.name_zh || node.id,
+      lon: node.lon,
+      lat: node.lat,
+      role: waypointRole(node, idx, lastIdx),
+    }));
+  }
+
   function findRoutes({
     from,
     to,
@@ -212,6 +246,7 @@ export function createRouter(compiledGraph) {
     const selected = interleaveDiverseRoutes(byMode, maxRoutes).map((route, i) => ({
       routeId: `${originNode.id}>${destNode.id}|${route.mode}|${i + 1}`,
       ...route,
+      waypoints: buildWaypoints(route.nodeSequence, originNode, destNode),
     }));
 
     const straightLineKm = +haversineKm(originNode.lon, originNode.lat, destNode.lon, destNode.lat).toFixed(1);
