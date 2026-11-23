@@ -1,0 +1,192 @@
+{
+  "passages": [
+    {
+      "id": "CP_BAB",
+      "marnetPassage": "babalmandab",
+      "type": "chokepoint",
+      "name_zh": "曼德海峡",
+      "name_en": "Bab-el-Mandeb",
+      "lon": 43.33,
+      "lat": 12.58,
+      "major": true,
+      "region": "middleEast",
+      "aliases": ["Bab el-Mandeb", "Bab el Mandeb", "Red Sea South"]
+    },
+    {
+      "id": "CP_SUEZ",
+      "marnetPassage": "suez",
+      "type": "chokepoint",
+      "name_zh": "苏伊士运河",
+      "name_en": "Suez Canal",
+      "lon": 32.35,
+      "lat": 30.58,
+      "major": true,
+      "region": "middleEast",
+      "aliases": ["Suez", "Suez Canal"]
+    },
+    {
+      "id": "CP_HORMUZ",
+      "marnetPassage": "ormuz",
+      "type": "chokepoint",
+      "name_zh": "霍尔木兹海峡",
+      "name_en": "Strait of Hormuz",
+      "lon": 56.25,
+      "lat": 26.56,
+      "major": true,
+      "region": "middleEast",
+      "aliases": ["Hormuz", "Ormuz", "Strait of Hormuz"]
+    },
+    {
+      "id": "CP_MALACCA",
+      "marnetPassage": "malacca",
+      "type": "chokepoint",
+      "name_zh": "马六甲海峡",
+      "name_en": "Strait of Malacca",
+      "lon": 101.5,
+      "lat": 2.5,
+      "major": true,
+      "region": "southeastAsia",
+      "aliases": ["Malacca", "Strait of Malacca"]
+    },
+    {
+      "id": "CP_SUNDA",
+      "marnetPassage": "sunda",
+      "type": "chokepoint",
+      "name_zh": "巽他海峡",
+      "name_en": "Sunda Strait",
+      "lon": 105.8,
+      "lat": -6.0,
+      "major": false,
+      "region": "southeastAsia",
+      "aliases": ["Sunda", "Sunda Strait"]
+    },
+    {
+      "id": "CP_CAPE",
+      "marnetPassage": "south_africa",
+      "type": "chokepoint",
+      "name_zh": "好望角（绕行）",
+      "name_en": "Cape of Good Hope",
+      "lon": 18.47,
+      "lat": -34.36,
+      "major": true,
+      "region": "southernAfrica",
+      "aliases": ["Cape of Good Hope", "Cape route"]
+    },
+    {
+      "id": "CP_GIBRALTAR",
+      "marnetPassage": "gibraltar",
+      "type": "chokepoint",
+      "name_zh": "直布罗陀海峡",
+      "name_en": "Strait of Gibraltar",
+      "lon": -5.5,
+      "lat": 35.96,
+      "major": true,
+      "region": "europe",
+      "aliases": ["Gibraltar", "Strait of Gibraltar"]
+    },
+    {
+      "id": "CP_PANAMA",
+      "marnetPassage": "panama",
+      "type": "chokepoint",
+      "name_zh": "巴拿马运河",
+      "name_en": "Panama Canal",
+      "lon": -79.68,
+      "lat": 9.08,
+      "major": true,
+      "region": "northAmerica",
+      "aliases": ["Panama", "Panama Canal"]
+    },
+    {
+      "id": "CP_BOSPHORUS",
+      "marnetPassage": "bosporus",
+      "type": "chokepoint",
+      "name_zh": "博斯普鲁斯海峡",
+      "name_en": "Bosphorus",
+      "lon": 29.07,
+      "lat": 41.12,
+      "major": true,
+      "region": "europe",
+      "aliases": ["Bosphorus", "Bosporus"]
+    },
+    {
+      "id": "CP_DARDANELLES",
+      "marnetPassage": "dardanelles",
+      "type": "chokepoint",
+      "name_zh": "达达尼尔海峡",
+      "name_en": "Dardanelles",
+      "lon": 26.4,
+      "lat": 40.15,
+      "major": false,
+      "region": "europe",
+      "aliases": ["Dardanelles"]
+    },
+    {
+      "id": "CP_BERING",
+      "marnetPassage": "bering",
+      "type": "chokepoint",
+      "name_zh": "白令海峡",
+      "name_en": "Bering Strait",
+      "lon": -169.0,
+      "lat": 65.8,
+      "major": false,
+      "region": "arctic",
+      "aliases": ["Bering", "Bering Strait"]
+    },
+    {
+      "id": "CP_NORTHWEST",
+      "marnetPassage": "northwest",
+      "type": "chokepoint",
+      "name_zh": "西北航道",
+      "name_en": "Northwest Passage",
+      "lon": -95.0,
+      "lat": 74.0,
+      "major": false,
+      "region": "arctic",
+      "aliases": ["Northwest Passage"]
+    },
+    {
+      "id": "CP_MAGELLAN",
+      "marnetPassage": "chili",
+      "type": "chokepoint",
+      "name_zh": "麦哲伦海峡/合恩角",
+      "name_en": "Magellan / Cape Horn",
+      "lon": -70.0,
+      "lat": -55.0,
+      "major": false,
+      "region": "southAmerica",
+      "aliases": ["Magellan", "Cape Horn", "Chili"]
+    }
+  ],
+  "coupledPassages": {
+    "CP_SUEZ": ["CP_SUEZ", "CP_BAB"],
+    "CP_BAB": ["CP_BAB", "CP_SUEZ"]
+  },
+  "airspaces": [
+    {
+      "id": "AS_RUSSIA",
+      "type": "airspace",
+      "name_zh": "俄罗斯空域",
+      "name_en": "Russian airspace",
+      "lon": 50.0,
+      "lat": 58.0,
+      "region": "europe",
+      "boxes": [
+        { "minLon": 28.0, "maxLon": 179.9, "minLat": 50.5, "maxLat": 78.0 }
+      ],
+      "aliases": ["Russian airspace", "Russia airspace"]
+    },
+    {
+      "id": "AS_MIDEAST",
+      "type": "airspace",
+      "name_zh": "中东空域（海湾/伊朗/伊拉克/红海上空）",
+      "name_en": "Middle East airspace",
+      "lon": 46.0,
+      "lat": 28.0,
+      "region": "middleEast",
+      "boxes": [
+        { "minLon": 34.5, "maxLon": 62.0, "minLat": 14.0, "maxLat": 36.8 }
+      ],
+      "aliases": ["Middle East airspace", "Gulf airspace"]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "multimodal-router",
+  "version": "1.0.0",
+  "description": "Standalone multimodal freight routing engine and HTTP service with precomputed snapshots and SQLite route caching.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "fetch:data": "node scripts/fetch-datasets.mjs",
+    "build:graph": "node scripts/build-graph.mjs",
+    "precompute": "node scripts/precompute.mjs",
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "license": "MIT"
+}

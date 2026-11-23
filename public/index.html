@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Multimodal Router · 多式联运路径评估台</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Multimodal Router</h1>
+      <span class="subtitle">全球多式联运路径计算与咽喉绕行评估服务</span>
+    </div>
+    <div id="health-badge" class="health-badge">加载中…</div>
+  </header>
+
+  <main class="layout">
+    <aside class="controls">
+      <section class="panel">
+        <h2>起终点设置</h2>
+        <label class="field">
+          <span>起运地（UN/LOCODE / IATA / 城市名）</span>
+          <input id="from-input" list="node-options" value="CNSZX" placeholder="例如 CNSZX, 深圳, CNYTN, SZX" />
+        </label>
+        <label class="field">
+          <span>目的地（UN/LOCODE / IATA / 城市名）</span>
+          <input id="to-input" list="node-options" value="NLAMS" placeholder="例如 NLAMS, 阿姆斯特丹, DXB, MXMEX" />
+        </label>
+        <datalist id="node-options"></datalist>
+
+        <div class="quick-presets">
+          <button type="button" class="preset-btn" data-from="CNSZX" data-to="NLAMS">深圳 → 阿姆斯特丹</button>
+          <button type="button" class="preset-btn" data-from="CNSZX" data-to="AEDXB">深圳 → 迪拜</button>
+          <button type="button" class="preset-btn" data-from="CNSZX" data-to="SARUH">深圳 → 利雅得</button>
+          <button type="button" class="preset-btn" data-from="CNSZX" data-to="MXMEX">深圳 → 墨西哥城</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>运输方式</h2>
+        <div class="checks">
+          <label><input type="checkbox" name="mode" value="sea" checked /> 海运 Sea</label>
+          <label><input type="checkbox" name="mode" value="air" checked /> 空运 Air</label>
+          <label><input type="checkbox" name="mode" value="rail" checked /> 铁路 Rail</label>
+          <label><input type="checkbox" name="mode" value="road" checked /> 公路 Road</label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>咽喉 / 空域受阻模拟 (Avoid)</h2>
+        <div id="chokepoint-list" class="chokepoint-list"></div>
+      </section>
+
+      <div class="actions">
+        <button id="run-btn" type="button" class="primary-btn">计算多式联运路径</button>
+        <button id="compare-btn" type="button" class="secondary-btn">基线 vs 绕行对比</button>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <div class="map-panel">
+        <div class="map-header">
+          <span id="route-summary">选择起终点并计算路径</span>
+          <span id="cache-badge" class="cache-badge">—</span>
+        </div>
+        <canvas id="world-map" width="1100" height="500"></canvas>
+      </div>
+
+      <div id="impact-banner" class="impact-banner hidden"></div>
+      <div id="routes-grid" class="routes-grid"></div>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
