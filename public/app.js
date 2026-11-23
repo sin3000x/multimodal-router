@@ -1,11 +1,3 @@
-const MODE_COLORS = {
-  sea: '#38bdf8',
-  air: '#a78bfa',
-  rail: '#34d399',
-  road: '#fbbf24',
-  local: '#fbbf24',
-};
-
 const KEY_AVOID_IDS = new Set([
   'CP_SUEZ',
   'CP_BAB',
@@ -17,8 +9,11 @@ const KEY_AVOID_IDS = new Set([
   'AS_MIDEAST',
 ]);
 
+const THEME_KEY = 'mmr-theme';
+
 let worldGeo = null;
 let currentRoutes = [];
+let currentEndpoints = { origin: null, destination: null };
 let activeRouteId = null;
 
 async function fetchJson(url, options) {
@@ -28,24 +23,110 @@ async function fetchJson(url, options) {
   return data;
 }
 
+function getCssTokens() {
+  const s = getComputedStyle(document.documentElement);
+  const get = (name, fallback) => s.getPropertyValue(name).trim() || fallback;
+  return {
+    ocean: get('--map-ocean', '#dbeafe'),
+    land: get('--map-land', '#ffffff'),
+    coast: get('--map-coast', '#64748b'),
+    grid: get('--map-grid', 'rgba(15, 23, 42, 0.08)'),
+    labelBg: get('--map-label-bg', 'rgba(255, 255, 255, 0.92)'),
+    labelText: get('--map-label-text', '#0f172a'),
+    labelBorder: get('--map-label-border', '#94a3b8'),
+    modes: {
+      sea: get('--sea', '#0284c7'),
+      air: get('--air', '#7c3aed'),
+      rail: get('--rail', '#059669'),
+      road: get('--road', '#d97706'),
+      local: get('--road', '#d97706'),
+    },
+  };
+}
+
+function applyTheme(theme) {
+  const valid = ['light', 'dark', 'system'].includes(theme) ? theme : 'light';
+  document.documentElement.setAttribute('data-theme', valid);
+  localStorage.setItem(THEME_KEY, valid);
+  for (const btn of document.querySelectorAll('.theme-btn')) {
+    btn.classList.toggle('active', btn.dataset.theme === valid);
+  }
+  drawWorldMap(currentRoutes, activeRouteId);
+}
+
+function initTheme() {
+  const saved = localStorage.getItem(THEME_KEY) || 'light';
+  applyTheme(saved);
+  for (const btn of document.querySelectorAll('.theme-btn')) {
+    btn.onclick = () => applyTheme(btn.dataset.theme);
+  }
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (document.documentElement.getAttribute('data-theme') === 'system') {
+      drawWorldMap(currentRoutes, activeRouteId);
+    }
+  });
+}
+
 function project([lon, lat], width, height) {
   const x = ((lon + 180) / 360) * width;
   const y = ((90 - lat) / 180) * height;
   return [x, y];
 }
 
+function drawPin(ctx, node, color, tokens, alignRight = false) {
+  if (!node || !Number.isFinite(node.lon) || !Number.isFinite(node.lat)) return;
+  const w = ctx.canvas.width;
+  const h = ctx.canvas.height;
+  const [x, y] = project([node.lon, node.lat], w, h);
+
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  const label = `${node.name_zh || node.name_en} (${node.id})`;
+  ctx.font = '600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const metrics = ctx.measureText(label);
+  const padX = 7;
+  const boxW = metrics.width + padX * 2;
+  const boxH = 22;
+  const boxX = alignRight
+    ? Math.max(8, x - boxW - 10)
+    : Math.min(w - boxW - 8, x + 10);
+  const boxY = Math.max(8, Math.min(h - boxH - 8, y - 11));
+
+  ctx.fillStyle = tokens.labelBg;
+  ctx.strokeStyle = tokens.labelBorder;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.roundRect(boxX, boxY, boxW, boxH, 5);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = tokens.labelText;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, boxX + padX, boxY + boxH / 2 + 0.5);
+  ctx.restore();
+}
+
 function drawWorldMap(routes, highlightedId) {
   const canvas = document.getElementById('world-map');
+  if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const w = canvas.width;
   const h = canvas.height;
+  const tokens = getCssTokens();
 
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = '#09101f';
+  ctx.fillStyle = tokens.ocean;
   ctx.fillRect(0, 0, w, h);
 
   // Graticule
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)';
+  ctx.strokeStyle = tokens.grid;
   ctx.lineWidth = 1;
   for (let lon = -150; lon <= 150; lon += 30) {
     const [x] = project([lon, 0], w, h);
@@ -64,9 +145,9 @@ function drawWorldMap(routes, highlightedId) {
 
   // Land polygons
   if (worldGeo?.features) {
-    ctx.fillStyle = '#162238';
-    ctx.strokeStyle = '#263552';
-    ctx.lineWidth = 0.7;
+    ctx.fillStyle = tokens.land;
+    ctx.strokeStyle = tokens.coast;
+    ctx.lineWidth = 0.9;
     for (const f of worldGeo.features) {
       const rings =
         f.geometry?.type === 'Polygon'
@@ -75,6 +156,7 @@ function drawWorldMap(routes, highlightedId) {
           ? f.geometry.coordinates.map((p) => p[0])
           : [];
       for (const ring of rings) {
+        if (!ring?.length) continue;
         ctx.beginPath();
         ring.forEach((pt, idx) => {
           const [x, y] = project(pt, w, h);
@@ -88,16 +170,23 @@ function drawWorldMap(routes, highlightedId) {
     }
   }
 
-  // Draw routes (dim non-selected when one is highlighted)
-  for (const route of routes) {
-    const isActive = !highlightedId || route.routeId === highlightedId;
-    const color = MODE_COLORS[route.mode] || '#e2e8f0';
+  // Draw non-selected routes first, then highlighted route on top
+  const ordered = [...routes].sort((a, b) =>
+    a.routeId === highlightedId ? 1 : b.routeId === highlightedId ? -1 : 0
+  );
+
+  for (const route of ordered) {
+    const isSelected = highlightedId === route.routeId;
+    const isDimmed = Boolean(highlightedId) && !isSelected;
+    const color = tokens.modes[route.mode] || tokens.modes.sea;
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.globalAlpha = isActive ? (highlightedId === route.routeId ? 1 : 0.75) : 0.18;
-    ctx.lineWidth = highlightedId === route.routeId ? 2.8 : 1.5;
-    if (route.mode === 'air') ctx.setLineDash([6, 4]);
-    else if (route.mode === 'rail') ctx.setLineDash([3, 3]);
+    ctx.globalAlpha = isDimmed ? 0.22 : isSelected ? 0.98 : 0.8;
+    ctx.lineWidth = isSelected ? 3.2 : 1.8;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    if (route.mode === 'air') ctx.setLineDash([7, 5]);
+    else if (route.mode === 'rail') ctx.setLineDash([3, 4]);
 
     for (const leg of route.legs || []) {
       const coords = leg.geometry || [];
@@ -110,7 +199,6 @@ function drawWorldMap(routes, highlightedId) {
           ctx.moveTo(x, y);
         } else {
           const prev = coords[i - 1];
-          // Break stroke across antimeridian
           if (Math.abs(pt[0] - prev[0]) > 180) {
             ctx.moveTo(x, y);
           } else {
@@ -122,6 +210,11 @@ function drawWorldMap(routes, highlightedId) {
     }
     ctx.restore();
   }
+
+  const { origin, destination } = currentEndpoints;
+  const destOnLeft = origin && destination && destination.lon < origin.lon;
+  drawPin(ctx, origin, '#059669', tokens, !destOnLeft);
+  drawPin(ctx, destination, '#dc2626', tokens, destOnLeft);
 }
 
 function selectedModes() {
@@ -206,6 +299,8 @@ async function runQuery(isCompare = false) {
     body: JSON.stringify({ from, to, modes, avoid, maxRoutes: 8, includeGeometry: true }),
   });
 
+  currentEndpoints = { origin: data.origin, destination: data.destination };
+
   const badge = document.getElementById('cache-badge');
   const c = data.meta?.cache;
   if (c) {
@@ -226,12 +321,20 @@ async function refreshHealth() {
 }
 
 async function init() {
-  const [geo, nodesRes, cpRes] = await Promise.all([
-    fetchJson('/countries.geojson').catch(() => null),
+  initTheme();
+
+  // Fetch basemap independently so even if slow it triggers a redraw when loaded
+  fetchJson('/countries.geojson')
+    .then((geo) => {
+      worldGeo = geo;
+      drawWorldMap(currentRoutes, activeRouteId);
+    })
+    .catch((err) => console.warn('Failed to load basemap:', err));
+
+  const [nodesRes, cpRes] = await Promise.all([
     fetchJson('/v1/nodes?limit=100'),
     fetchJson('/v1/chokepoints'),
   ]);
-  worldGeo = geo;
 
   const datalist = document.getElementById('node-options');
   for (const n of nodesRes.nodes) {
