@@ -154,7 +154,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
     for (const edge of landConnectionsByNode.get(node.id) ?? []) {
       const target = nodeById.get(edge.to);
       if (
-        (target?.type === 'port' || target?.functions?.includes('port')) &&
+        (target?.type === 'port' || (target?.type === 'city' && target?.isCuratedPort)) &&
         target.marnetVertexId != null
       ) {
         candidates.set(target.id, {

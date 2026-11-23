@@ -59,12 +59,15 @@ export function createRouter(compiledGraph) {
   function resolveNode(query) {
     if (!query) return null;
     if (typeof query === 'object' && Number.isFinite(query.lon) && Number.isFinite(query.lat)) {
+      if (query.id && nodeById.has(query.id)) return nodeById.get(query.id);
+      const label = query.name_zh || query.name_en || query.name || `${query.lon.toFixed(2)}, ${query.lat.toFixed(2)}`;
       return {
+        ...query,
         id: query.id || `COORD_${query.lon.toFixed(2)}_${query.lat.toFixed(2)}`,
-        type: 'custom',
-        codeStandard: 'custom',
-        name_zh: query.name || `${query.lon.toFixed(2)}, ${query.lat.toFixed(2)}`,
-        name_en: query.name || `${query.lon.toFixed(2)}, ${query.lat.toFixed(2)}`,
+        type: query.type || 'custom',
+        codeStandard: query.codeStandard || 'custom',
+        name_zh: query.name_zh || label,
+        name_en: query.name_en || label,
         lon: normalizeLon(query.lon),
         lat: query.lat,
       };

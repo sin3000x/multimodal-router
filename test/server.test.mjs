@@ -44,7 +44,10 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     const d1 = await r1.json();
     assert.equal(d1.meta.cache.hit, false);
     assert.equal(d1.origin.id, 'CNSZX');
+    assert.equal(d1.origin.name_zh, '深圳');
     assert.equal(d1.destination.id, 'NLAMS');
+    assert.equal(d1.destination.name_zh, '阿姆斯特丹');
+    assert.ok(!d1.routes.some((r) => r.mode === 'sea' && r.destGateway.id === 'DEDUI'));
     assert.ok(d1.routes.length >= 3);
 
     // Querying via Chinese names OR legacy IDs hits same canonical cache entry

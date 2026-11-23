@@ -203,7 +203,7 @@ async function runQuery(isCompare = false) {
   const data = await fetchJson(endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ from, to, modes, avoid, maxRoutes: 10, includeGeometry: true }),
+    body: JSON.stringify({ from, to, modes, avoid, maxRoutes: 8, includeGeometry: true }),
   });
 
   const badge = document.getElementById('cache-badge');
