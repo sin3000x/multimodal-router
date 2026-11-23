@@ -18,12 +18,14 @@ const ROLE_LABELS = {
   hub: '中转枢纽',
 };
 
+const MODE_LABELS = { sea: '海运', air: '空运', rail: '铁路', road: '公路', local: '本地接驳' };
 const THEME_KEY = 'mmr-theme';
 
 let worldGeo = null;
 let currentRoutes = [];
 let currentEndpoints = { origin: null, destination: null };
 let activeRouteId = null;
+let activeLeg = null;
 
 // Web Mercator coordinate helpers (mx in [0, 1), my in [0, 1])
 function clampLat(lat) {
@@ -47,7 +49,9 @@ const DEFAULT_CENTER_MY = latToMy(20);
 // Interactive map viewport state (isotropic Web Mercator)
 const view = { zoom: 1, centerMx: 0.5, centerMy: DEFAULT_CENTER_MY };
 let renderedMarkers = [];
+let renderedLegs = [];
 let hoveredWaypointId = null;
+let hoveredLeg = null;
 
 async function fetchJson(url, options) {
   const res = await fetch(url, options);
@@ -103,8 +107,8 @@ function initTheme() {
 function getCanvasMetrics() {
   const canvas = document.getElementById('world-map');
   if (!canvas) return null;
-  const cssW = Math.max(300, Math.round(canvas.clientWidth || 900));
-  const cssH = Math.max(260, Math.round(canvas.clientHeight || 440));
+  const cssW = canvas.clientWidth || 900;
+  const cssH = canvas.clientHeight || 440;
   const dpr = Math.min(3, window.devicePixelRatio || 1);
   return { canvas, cssW, cssH, dpr };
 }
@@ -125,21 +129,19 @@ function wrapUnit(u) {
   return ((u % 1) + 1) % 1;
 }
 
+function clampZoom(zoom, aspect) {
+  return Math.max(Math.min(0.8, 0.76 * aspect), Math.min(12, zoom));
+}
+
 function clampView() {
-  view.zoom = Math.max(1, Math.min(12, view.zoom));
-  view.centerMx = wrapUnit(view.centerMx);
   const m = getCanvasMetrics();
   const aspectRatio = m ? m.cssH / m.cssW : 0.48;
+  view.zoom = clampZoom(view.zoom, aspectRatio);
+  view.centerMx = wrapUnit(view.centerMx);
   const halfMySpan = Math.min(0.49, (aspectRatio / view.zoom) * 0.5);
   const minMy = Math.max(latToMy(82), halfMySpan * 0.7);
   const maxMy = Math.min(latToMy(-76), 1 - halfMySpan * 0.7);
-  if (view.zoom <= 1.01) {
-    view.zoom = 1;
-    view.centerMx = 0.5;
-    view.centerMy = Math.max(minMy, Math.min(maxMy, DEFAULT_CENTER_MY));
-  } else {
-    view.centerMy = Math.max(minMy, Math.min(maxMy, view.centerMy));
-  }
+  view.centerMy = Math.max(minMy, Math.min(maxMy, view.centerMy));
   const badge = document.getElementById('zoom-level');
   if (badge) badge.textContent = `${view.zoom.toFixed(1)}x`;
 }
@@ -149,6 +151,13 @@ function projectRaw(mx, my, cssW, cssH) {
   const x = cssW / 2 + (mx - view.centerMx) * worldPx;
   const y = cssH / 2 + (my - view.centerMy) * worldPx;
   return [x, y];
+}
+
+function* visibleWorldOffsets(minMx = 0, maxMx = 1) {
+  const halfWidth = 0.5 / view.zoom;
+  const first = Math.ceil(view.centerMx - halfWidth - maxMx);
+  const last = Math.floor(view.centerMx + halfWidth - minMx);
+  for (let offset = first; offset <= last; offset++) yield offset;
 }
 
 function nearestCopyMx(mx) {
@@ -178,48 +187,61 @@ function unwrapMxs(coords) {
   return out;
 }
 
-function fitRouteToView(route) {
-  if (!route) return;
+function fitRoutesToView(routes) {
   const m = getCanvasMetrics();
   if (!m) return;
 
-  const rawPts = [];
-  for (const leg of route.legs || []) {
-    for (const pt of leg.geometry || []) rawPts.push(pt);
-  }
-  for (const wp of route.waypoints || []) rawPts.push([wp.lon, wp.lat]);
-  if (!rawPts.length) return;
+  const longitudeRanges = [];
+  let minMy = Infinity;
+  let maxMy = -Infinity;
 
-  const sortedMxs = [...new Set(rawPts.map((p) => +lonToMx(p[0]).toFixed(5)))].sort((a, b) => a - b);
-  let maxGap = -1;
-  let gapStartIdx = 0;
-  for (let i = 0; i < sortedMxs.length; i++) {
-    const next = i + 1 < sortedMxs.length ? sortedMxs[i + 1] : sortedMxs[0] + 1;
-    const gap = next - sortedMxs[i];
+  function includePath(points) {
+    if (!points.length) return;
+    let minMx = Infinity;
+    let maxMx = -Infinity;
+    for (const [mx, my] of points) {
+      minMx = Math.min(minMx, mx);
+      maxMx = Math.max(maxMx, mx);
+      minMy = Math.min(minMy, my);
+      maxMy = Math.max(maxMy, my);
+    }
+
+    const span = maxMx - minMx;
+    const start = wrapUnit(minMx);
+    const end = start + span;
+    if (span >= 1) longitudeRanges.push([0, 1]);
+    else if (end > 1) longitudeRanges.push([start, 1], [0, end - 1]);
+    else longitudeRanges.push([start, end]);
+  }
+
+  for (const route of routes) {
+    for (const leg of route.legs || []) includePath(unwrapMxs(leg.geometry || []));
+    for (const wp of route.waypoints || []) includePath([[lonToMx(wp.lon), latToMy(wp.lat)]]);
+  }
+  if (!longitudeRanges.length) return;
+
+  // Place the wrap seam in the largest gap between paths.
+  longitudeRanges.sort((a, b) => a[0] - b[0]);
+  const firstStart = longitudeRanges[0][0];
+  let coveredUntil = firstStart;
+  let maxGap = 0;
+  let gapEnd = 0;
+  for (const [start, end] of [...longitudeRanges, [firstStart + 1, firstStart + 1]]) {
+    const gap = start - coveredUntil;
     if (gap > maxGap) {
       maxGap = gap;
-      gapStartIdx = i;
+      gapEnd = start;
     }
+    coveredUntil = Math.max(coveredUntil, end);
   }
-  const minMx = sortedMxs[(gapStartIdx + 1) % sortedMxs.length];
-  let maxMx = sortedMxs[gapStartIdx];
-  if (maxMx < minMx) maxMx += 1;
-  const mxSpan = sortedMxs.length === 1 ? 0.04 : Math.max(0.04, maxMx - minMx);
 
-  const mys = rawPts.map((p) => latToMy(p[1]));
-  const minMy = Math.min(...mys);
-  const maxMy = Math.max(...mys);
-  const mySpan = Math.max(0.03, maxMy - minMy);
-
-  view.centerMx = wrapUnit((minMx + maxMx) / 2);
+  const mxSpan = 1 - maxGap;
+  view.centerMx = gapEnd + mxSpan / 2;
   view.centerMy = (minMy + maxMy) / 2;
-
-  const aspect = m.cssH / m.cssW;
-  const zx = 0.8 / mxSpan;
-  const zy = (0.76 * aspect) / mySpan;
-  view.zoom = Math.max(1.1, Math.min(9.0, Math.min(zx, zy)));
+  const zx = 0.8 / Math.max(0.04, mxSpan);
+  const zy = (0.76 * m.cssH) / (m.cssW * Math.max(0.03, maxMy - minMy));
+  view.zoom = Math.min(9, zx, zy);
   clampView();
-  drawWorldMap(currentRoutes, activeRouteId);
 }
 
 function boxesOverlap(a, b, pad = 4) {
@@ -355,7 +377,7 @@ function drawWorldMap(routes, highlightedId) {
   // Graticule across wrapped world copies
   ctx.strokeStyle = tokens.grid;
   ctx.lineWidth = 1;
-  for (const mxOffset of [-1, 0, 1]) {
+  for (const mxOffset of visibleWorldOffsets()) {
     for (let lon = -150; lon <= 150; lon += 30) {
       const [x] = projectRaw(lonToMx(lon) + mxOffset, 0.5, cssW, cssH);
       if (x < 0 || x > cssW) continue;
@@ -374,16 +396,12 @@ function drawWorldMap(routes, highlightedId) {
     ctx.stroke();
   }
 
-  // Land polygons in Web Mercator (drawn at mxOffset -1, 0, +1 for seamless panning & antimeridian)
+  // Land polygons in each visible copy keep longitude wrapping seamless.
   if (worldGeo?.features) {
     ctx.fillStyle = tokens.land;
     ctx.strokeStyle = tokens.coast;
     ctx.lineWidth = 0.8;
-    for (const mxOffset of [-1, 0, 1]) {
-      const [leftX] = projectRaw(mxOffset, 0.5, cssW, cssH);
-      const [rightX] = projectRaw(mxOffset + 1, 0.5, cssW, cssH);
-      if (rightX < 0 || leftX > cssW) continue;
-
+    for (const mxOffset of visibleWorldOffsets()) {
       for (const f of worldGeo.features) {
         const rings =
           f.geometry?.type === 'Polygon'
@@ -409,37 +427,44 @@ function drawWorldMap(routes, highlightedId) {
     }
   }
 
-  // Draw non-selected routes first, then highlighted route on top
-  const ordered = [...routes].sort((a, b) =>
-    a.routeId === highlightedId ? 1 : b.routeId === highlightedId ? -1 : 0
-  );
+  // Draw hovered routes last and use the same projected paths for hit testing.
+  const priority = (route) => hoveredLeg?.route === route ? 2 : Number(route.routeId === highlightedId);
+  const ordered = [...routes].sort((a, b) => priority(a) - priority(b));
+  renderedLegs = [];
 
   for (const route of ordered) {
     const isSelected = highlightedId === route.routeId;
-    const isDimmed = Boolean(highlightedId) && !isSelected;
+    const isHovered = hoveredLeg?.route === route;
     const color = tokens.modes[route.mode] || tokens.modes.sea;
     ctx.save();
-    ctx.strokeStyle = color;
-    ctx.globalAlpha = isDimmed ? 0.24 : isSelected ? 0.98 : 0.8;
-    ctx.lineWidth = isSelected ? 2.8 : 1.5;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    if (route.mode === 'air') ctx.setLineDash([6, 4]);
-    else if (route.mode === 'rail') ctx.setLineDash([3, 3.5]);
+    const dash = route.mode === 'air' ? [6, 4] : route.mode === 'rail' ? [3, 3.5] : [];
 
     for (const leg of route.legs || []) {
       const unwrapped = unwrapMxs(leg.geometry || []);
       if (unwrapped.length < 2) continue;
-      const midMx = unwrapped[Math.floor(unwrapped.length / 2)][0];
-      const baseShift = nearestCopyMx(midMx) - midMx;
+      const longitudes = unwrapped.map(([mx]) => mx);
 
-      for (const extraShift of [baseShift - 1, baseShift, baseShift + 1]) {
+      for (const extraShift of visibleWorldOffsets(Math.min(...longitudes), Math.max(...longitudes))) {
+        const points = unwrapped.map(([mx, my]) => projectRaw(mx + extraShift, my, cssW, cssH));
+        renderedLegs.push({ route, leg, points });
         ctx.beginPath();
-        for (let i = 0; i < unwrapped.length; i++) {
-          const [x, y] = projectRaw(unwrapped[i][0] + extraShift, unwrapped[i][1], cssW, cssH);
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
+        ctx.moveTo(...points[0]);
+        for (const point of points.slice(1)) ctx.lineTo(...point);
+
+        const isFocusedLeg = leg === hoveredLeg?.leg || leg === activeLeg;
+        if (isFocusedLeg) {
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 0.9;
+          ctx.strokeStyle = tokens.labelBg;
+          ctx.lineWidth = 9;
+          ctx.stroke();
         }
+        ctx.setLineDash(dash);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = isSelected || isHovered ? 0.98 : highlightedId ? 0.46 : 0.8;
+        ctx.lineWidth = isFocusedLeg ? 5 : isSelected || isHovered ? 3 : 2;
         ctx.stroke();
       }
     }
@@ -467,124 +492,166 @@ function drawWorldMap(routes, highlightedId) {
   drawWaypointLabels(ctx, renderedMarkers, tokens, cssW, cssH);
 }
 
+function pointToSegmentDistanceSquared(x, y, [ax, ay], [bx, by]) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / lengthSquared)) : 0;
+  return (x - ax - t * dx) ** 2 + (y - ay - t * dy) ** 2;
+}
+
+function mapTargetAt(x, y, pointerType) {
+  const radius = pointerType === 'touch' ? 18 : 10;
+  let marker = null;
+  let bestDistance = radius ** 2;
+  for (const item of renderedMarkers) {
+    const distance = (item.x - x) ** 2 + (item.y - y) ** 2;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      marker = item;
+    }
+  }
+  if (marker) return marker;
+
+  let target = null;
+  // Prefer the topmost stroke when two paths are equally close.
+  for (let i = renderedLegs.length - 1; i >= 0; i--) {
+    const item = renderedLegs[i];
+    for (let j = 1; j < item.points.length; j++) {
+      const distance = pointToSegmentDistanceSquared(x, y, item.points[j - 1], item.points[j]);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        target = item;
+      }
+    }
+  }
+  return target;
+}
+
+function legSummary(leg) {
+  return `${MODE_LABELS[leg.mode] || leg.mode} · ${leg.fromName} → ${leg.toName} · ${leg.distanceKm} km`;
+}
+
+function clearMapHover() {
+  const changed = Boolean(hoveredWaypointId || hoveredLeg);
+  hoveredWaypointId = null;
+  hoveredLeg = null;
+  document.getElementById('map-tooltip').classList.add('hidden');
+  document.getElementById('world-map').classList.remove('map-target');
+  return changed;
+}
+
 function initMapInteractions() {
   const canvas = document.getElementById('world-map');
   const tooltip = document.getElementById('map-tooltip');
-  if (!canvas) return;
-
-  let dragging = false;
-  let dragStart = null;
+  let gesture = null;
 
   function cssPoint(e) {
     const rect = canvas.getBoundingClientRect();
-    return {
-      cx: e.clientX - rect.left,
-      cy: e.clientY - rect.top,
-      cssW: rect.width,
-      cssH: rect.height,
-    };
+    return { x: e.clientX - rect.left - canvas.clientLeft, y: e.clientY - rect.top - canvas.clientTop };
   }
 
-  function zoomAt(factor, cx, cy) {
+  function showMapTarget(target, x, y, preview = true) {
+    const waypoint = target?.wp;
+    const nextWaypointId = waypoint?.id ?? null;
+    const nextLeg = preview && target?.leg ? target : null;
+    const changed = hoveredWaypointId !== nextWaypointId || hoveredLeg?.leg !== nextLeg?.leg;
+    hoveredWaypointId = nextWaypointId;
+    hoveredLeg = nextLeg;
+    if (changed) drawWorldMap(currentRoutes, activeRouteId);
+
+    canvas.classList.toggle('map-target', Boolean(target));
+    tooltip.classList.toggle('hidden', !target);
+    if (!target) return;
+
+    tooltip.textContent = waypoint
+      ? `${waypoint.name_zh} (${waypoint.id}) · ${ROLE_LABELS[waypoint.role] || waypoint.type}`
+      : legSummary(target.leg);
+    const { offsetWidth, offsetHeight } = tooltip;
+    tooltip.style.left = `${Math.max(8, Math.min(canvas.clientWidth - offsetWidth - 8, x + 12))}px`;
+    const top = y - offsetHeight - 10;
+    tooltip.style.top = `${Math.max(8, Math.min(canvas.clientHeight - offsetHeight - 8, top < 8 ? y + 14 : top))}px`;
+  }
+
+  function zoomAt(factor, x, y) {
     const m = getCanvasMetrics();
     if (!m) return;
     const oldWorldPx = m.cssW * view.zoom;
-    const mxUnder = view.centerMx + (cx - m.cssW / 2) / oldWorldPx;
-    const myUnder = view.centerMy + (cy - m.cssH / 2) / oldWorldPx;
+    const mxUnder = view.centerMx + (x - m.cssW / 2) / oldWorldPx;
+    const myUnder = view.centerMy + (y - m.cssH / 2) / oldWorldPx;
 
-    view.zoom = Math.max(1, Math.min(12, view.zoom * factor));
+    view.zoom = Math.max(Math.min(1, view.zoom), Math.min(12, view.zoom * factor));
     const newWorldPx = m.cssW * view.zoom;
-    view.centerMx = mxUnder - (cx - m.cssW / 2) / newWorldPx;
-    view.centerMy = myUnder - (cy - m.cssH / 2) / newWorldPx;
+    view.centerMx = mxUnder - (x - m.cssW / 2) / newWorldPx;
+    view.centerMy = myUnder - (y - m.cssH / 2) / newWorldPx;
     clampView();
+    clearMapHover();
     drawWorldMap(currentRoutes, activeRouteId);
   }
 
-  canvas.addEventListener(
-    'wheel',
-    (e) => {
-      e.preventDefault();
-      const { cx, cy } = cssPoint(e);
-      const factor = e.deltaY < 0 ? 1.25 : 0.8;
-      zoomAt(factor, cx, cy);
-    },
-    { passive: false }
-  );
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const { x, y } = cssPoint(e);
+    zoomAt(e.deltaY < 0 ? 1.25 : 0.8, x, y);
+  }, { passive: false });
 
   canvas.addEventListener('dblclick', (e) => {
-    const { cx, cy } = cssPoint(e);
-    zoomAt(1.6, cx, cy);
+    const { x, y } = cssPoint(e);
+    zoomAt(1.6, x, y);
   });
 
-  canvas.addEventListener('mousedown', (e) => {
-    dragging = true;
-    canvas.classList.add('dragging');
-    dragStart = {
-      x: e.clientX,
-      y: e.clientY,
-      centerMx: view.centerMx,
-      centerMy: view.centerMy,
-    };
+  canvas.addEventListener('pointerdown', (e) => {
+    if (!e.isPrimary || e.button !== 0) return;
+    const { x, y } = cssPoint(e);
+    gesture = { id: e.pointerId, x, y, centerMx: view.centerMx, centerMy: view.centerMy, dragging: false };
+    canvas.setPointerCapture(e.pointerId);
   });
 
-  window.addEventListener('mousemove', (e) => {
-    if (dragging && dragStart) {
-      const m = getCanvasMetrics();
-      if (!m) return;
-      const worldPx = m.cssW * view.zoom;
-      const dx = e.clientX - dragStart.x;
-      const dy = e.clientY - dragStart.y;
-      view.centerMx = dragStart.centerMx - dx / worldPx;
-      view.centerMy = dragStart.centerMy - dy / worldPx;
-      clampView();
-      drawWorldMap(currentRoutes, activeRouteId);
+  canvas.addEventListener('pointermove', (e) => {
+    if (!e.isPrimary) return;
+    const { x, y } = cssPoint(e);
+    if (!gesture) {
+      if (e.pointerType !== 'touch') showMapTarget(mapTargetAt(x, y, e.pointerType), x, y);
       return;
     }
-
-    if (e.target !== canvas) {
-      if (hoveredWaypointId) {
-        hoveredWaypointId = null;
-        tooltip?.classList.add('hidden');
-        drawWorldMap(currentRoutes, activeRouteId);
-      }
-      return;
+    if (e.pointerId !== gesture.id) return;
+    const dx = x - gesture.x;
+    const dy = y - gesture.y;
+    if (!gesture.dragging && Math.hypot(dx, dy) < 5) return;
+    if (!gesture.dragging) {
+      gesture.dragging = true;
+      canvas.classList.add('dragging');
+      clearMapHover();
     }
-
-    const { cx, cy, cssW } = cssPoint(e);
-    let nearest = null;
-    let bestDist = 14;
-    for (const item of renderedMarkers) {
-      const d = Math.hypot(item.x - cx, item.y - cy);
-      if (d < bestDist) {
-        bestDist = d;
-        nearest = item;
-      }
-    }
-
-    const nextId = nearest?.wp.id ?? null;
-    if (nextId !== hoveredWaypointId) {
-      hoveredWaypointId = nextId;
-      drawWorldMap(currentRoutes, activeRouteId);
-    }
-
-    if (nearest && tooltip) {
-      const roleText = ROLE_LABELS[nearest.wp.role] || nearest.wp.type;
-      tooltip.textContent = `${nearest.wp.name_zh} (${nearest.wp.id}) · ${roleText}`;
-      tooltip.style.left = `${Math.min(cssW - 180, Math.max(8, cx + 12))}px`;
-      tooltip.style.top = `${Math.max(8, cy - 28)}px`;
-      tooltip.classList.remove('hidden');
-      canvas.style.cursor = 'pointer';
-    } else if (tooltip) {
-      tooltip.classList.add('hidden');
-      canvas.style.cursor = '';
-    }
+    const worldPx = canvas.clientWidth * view.zoom;
+    view.centerMx = gesture.centerMx - dx / worldPx;
+    view.centerMy = gesture.centerMy - dy / worldPx;
+    clampView();
+    drawWorldMap(currentRoutes, activeRouteId);
   });
 
-  window.addEventListener('mouseup', () => {
-    if (!dragging) return;
-    dragging = false;
-    dragStart = null;
+  function finishGesture(e) {
+    if (e.pointerId !== gesture?.id) return;
+    gesture = null;
     canvas.classList.remove('dragging');
+  }
+
+  canvas.addEventListener('pointerup', (e) => {
+    if (e.pointerId !== gesture?.id) return;
+    const { x, y } = cssPoint(e);
+    const isTap = !gesture.dragging && Math.hypot(x - gesture.x, y - gesture.y) < 5;
+    finishGesture(e);
+    if (!isTap) return;
+    const target = mapTargetAt(x, y, e.pointerType);
+    if (target?.leg) selectRoute(target.route.routeId, target.leg);
+    else if (!target && activeLeg) selectRoute(activeRouteId);
+    showMapTarget(target?.wp || e.pointerType !== 'touch' ? target : null, x, y, false);
+  });
+
+  canvas.addEventListener('pointercancel', finishGesture);
+  canvas.addEventListener('lostpointercapture', finishGesture);
+  canvas.addEventListener('pointerleave', (e) => {
+    if (e.pointerType !== 'touch' && clearMapHover()) drawWorldMap(currentRoutes, activeRouteId);
   });
 
   document.getElementById('zoom-in-btn').onclick = () => {
@@ -596,28 +663,32 @@ function initMapInteractions() {
     if (m) zoomAt(1 / 1.5, m.cssW / 2, m.cssH / 2);
   };
   document.getElementById('fit-route-btn').onclick = () => {
-    const active = currentRoutes.find((r) => r.routeId === activeRouteId) ?? currentRoutes[0];
-    fitRouteToView(active);
+    const active = currentRoutes.find((r) => r.routeId === activeRouteId);
+    if (!active) return;
+    fitRoutesToView([active]);
+    clearMapHover();
+    drawWorldMap(currentRoutes, activeRouteId);
   };
   document.getElementById('reset-zoom-btn').onclick = () => {
     view.zoom = 1;
     view.centerMx = 0.5;
     view.centerMy = DEFAULT_CENTER_MY;
     clampView();
+    clearMapHover();
     drawWorldMap(currentRoutes, activeRouteId);
   };
 
-  if (typeof ResizeObserver !== 'undefined') {
-    const observer = new ResizeObserver(() => {
-      clampView();
-      drawWorldMap(currentRoutes, activeRouteId);
-    });
-    observer.observe(canvas);
-  }
-  window.addEventListener('resize', () => {
+  function resizeMap() {
     clampView();
+    clearMapHover();
     drawWorldMap(currentRoutes, activeRouteId);
-  });
+  }
+  if (typeof ResizeObserver !== 'undefined') {
+    const observer = new ResizeObserver(resizeMap);
+    observer.observe(canvas);
+  } else {
+    window.addEventListener('resize', resizeMap);
+  }
 }
 
 function selectedModes() {
@@ -628,9 +699,30 @@ function selectedAvoid() {
   return [...document.querySelectorAll('input[name="avoid"]:checked')].map((el) => el.value);
 }
 
+function selectRoute(routeId, leg = null) {
+  activeRouteId = routeId;
+  activeLeg = leg;
+  clearMapHover();
+  for (const card of document.querySelectorAll('.route-card')) {
+    const selected = card.dataset.routeId === activeRouteId;
+    card.classList.toggle('active', selected);
+    card.setAttribute('aria-pressed', String(selected));
+  }
+
+  const route = currentRoutes.find((r) => r.routeId === activeRouteId);
+  const selection = document.getElementById('map-selection');
+  selection.classList.toggle('hidden', !route);
+  document.getElementById('fit-route-btn').disabled = !route;
+  document.getElementById('map-selection-text').textContent = leg
+    ? legSummary(leg)
+    : route
+      ? `${route.modeLabel} · ${route.originGateway.name} → ${route.destGateway.name} · ${route.metrics.distanceKm} km · ${route.metrics.transitDays} 天`
+      : '';
+  drawWorldMap(currentRoutes, activeRouteId);
+}
+
 function renderRoutes(routes, { compareData = null } = {}) {
   currentRoutes = routes;
-  activeRouteId = routes[0]?.routeId ?? null;
 
   const grid = document.getElementById('routes-grid');
   grid.innerHTML = '';
@@ -648,12 +740,16 @@ function renderRoutes(routes, { compareData = null } = {}) {
 
   for (const r of routes) {
     const card = document.createElement('div');
-    card.className = `route-card${r.routeId === activeRouteId ? ' active' : ''}`;
-    card.onclick = () => {
-      activeRouteId = r.routeId;
-      for (const el of document.querySelectorAll('.route-card')) el.classList.remove('active');
-      card.classList.add('active');
-      drawWorldMap(currentRoutes, activeRouteId);
+    card.className = 'route-card';
+    card.dataset.routeId = r.routeId;
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
+    card.onclick = () => selectRoute(r.routeId);
+    card.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        card.click();
+      }
     };
 
     const via = r.viaHub ? ` → ${r.viaHub.code || r.viaHub.name}` : '';
@@ -686,7 +782,8 @@ function renderRoutes(routes, { compareData = null } = {}) {
     grid.appendChild(card);
   }
 
-  drawWorldMap(currentRoutes, activeRouteId);
+  fitRoutesToView(routes);
+  selectRoute(routes[0]?.routeId ?? null);
 }
 
 async function runQuery(isCompare = false) {

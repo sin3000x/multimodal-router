@@ -269,9 +269,8 @@ body {
   touch-action: none;
 }
 
-#world-map.dragging {
-  cursor: grabbing;
-}
+#world-map.map-target { cursor: pointer; }
+#world-map.dragging { cursor: grabbing; }
 
 .map-controls {
   position: absolute;
@@ -306,10 +305,12 @@ body {
   font-weight: 500;
 }
 
-.map-btn:hover {
+.map-btn:hover:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+.map-btn:disabled { opacity: 0.5; cursor: default; }
 
 .zoom-badge {
   font-size: 11px;
@@ -331,9 +332,23 @@ body {
   font-size: 11px;
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15);
-  white-space: nowrap;
+  max-width: calc(100% - 16px);
+  overflow-wrap: anywhere;
   z-index: 4;
 }
+
+.map-selection {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 2px 0;
+  font-size: 12px;
+}
+
+#map-selection-text { font-weight: 600; }
+.map-selection-hint { color: var(--muted); }
 
 .impact-banner {
   padding: 10px 14px;
@@ -346,7 +361,7 @@ body {
 
 .routes-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
   gap: 12px;
 }
 
@@ -361,6 +376,11 @@ body {
 .route-card:hover, .route-card.active {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
+}
+
+.route-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }

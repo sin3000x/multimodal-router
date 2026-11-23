@@ -84,11 +84,15 @@
           <div class="map-controls" role="toolbar" aria-label="地图缩放控制">
             <button id="zoom-in-btn" type="button" class="map-btn" title="放大">+</button>
             <button id="zoom-out-btn" type="button" class="map-btn" title="缩小">−</button>
-            <button id="fit-route-btn" type="button" class="map-btn map-btn-wide" title="缩放到当前选中路线">适配路线</button>
+            <button id="fit-route-btn" type="button" class="map-btn map-btn-wide" title="缩放到当前选中路线" disabled>适配路线</button>
             <button id="reset-zoom-btn" type="button" class="map-btn map-btn-wide" title="恢复全球视图">全球</button>
             <span id="zoom-level" class="zoom-badge">1.0x</span>
           </div>
           <div id="map-tooltip" class="map-tooltip hidden"></div>
+        </div>
+        <div id="map-selection" class="map-selection hidden">
+          <div id="map-selection-text" role="status"></div>
+          <span class="map-selection-hint">点选线路查看分段</span>
         </div>
       </div>
 
