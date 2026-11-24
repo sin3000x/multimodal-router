@@ -7,6 +7,7 @@ import portGroups from '../../data/curated/port-groups.json' with { type: 'json'
 
 const fold = (s) => String(s ?? '').normalize('NFKC').trim().toLowerCase();
 const passageTypes = new Set(['chokepoint', 'airspace', 'sea_area']);
+const localizedNames = (id) => Object.hasOwn(endpointNamesZh, id) ? endpointNamesZh[id] : [];
 
 export function createRouter(compiledGraph) {
   const nodes = compiledGraph.nodes ?? [];
@@ -21,8 +22,12 @@ export function createRouter(compiledGraph) {
   for (const [cityId, { aliases, ports }] of Object.entries(portGroups)) {
     const city = nodeById.get(cityId);
     if (!city) continue;
-    const names = [city.name_zh, city.name_en, ...aliases].map(fold).filter(Boolean);
-    for (const portId of ports) portGroupNamesById.set(portId, names);
+    const names = [city.name_zh, city.name_en, ...localizedNames(cityId), ...aliases].map(fold).filter(Boolean);
+    for (const portId of ports) {
+      const port = nodeById.get(portId);
+      if (!port || (port.type !== 'port' && !port.functions?.includes('port'))) continue;
+      portGroupNamesById.set(portId, [...(portGroupNamesById.get(portId) ?? []), ...names]);
+    }
   }
 
   for (const edge of compiledGraph.landEdges ?? []) {
@@ -52,7 +57,7 @@ export function createRouter(compiledGraph) {
     const names = [
       node.name_zh,
       node.name_en,
-      ...(Object.hasOwn(endpointNamesZh, node.id) ? endpointNamesZh[node.id] : []),
+      ...localizedNames(node.id),
     ].map(fold).filter(Boolean);
     const codes = [node.id, node.code, ...(node.legacyIds ?? [])].map(fold).filter(Boolean);
     const groupAliases = Object.hasOwn(portGroups, node.id) ? portGroups[node.id].aliases : [];
@@ -160,7 +165,7 @@ export function createRouter(compiledGraph) {
       functions: node.functions ?? [node.type],
       code: node.code ?? null,
       codeStandard: node.codeStandard ?? 'custom',
-      name_zh: endpoint && Object.hasOwn(endpointNamesZh, node.id) ? endpointNamesZh[node.id][0] : node.name_zh,
+      name_zh: (endpoint && localizedNames(node.id)[0]) || node.name_zh,
       name_en: node.name_en,
       country: node.country,
       lon: node.lon,

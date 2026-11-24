@@ -2,5 +2,37 @@
   "CNSZX": {
     "aliases": ["深圳港", "Shenzhen Port"],
     "ports": ["CNYTN", "CNSHK", "CNCWN", "CNMWN", "CNDCB"]
+  },
+  "CNCAN": {
+    "aliases": ["广州港", "Port of Guangzhou"],
+    "ports": ["CNNSA", "CNHUA"]
+  },
+  "CNSHA": {
+    "aliases": ["Port of Shanghai"],
+    "ports": ["CNYAN"]
+  },
+  "CNNGB": {
+    "aliases": ["Port of Ningbo-Zhoushan"],
+    "ports": ["CNZOS"]
+  },
+  "CNTSN": {
+    "aliases": ["Port of Tianjin"],
+    "ports": ["CNXIP", "CNTGU"]
+  },
+  "AEDXB": {
+    "aliases": ["迪拜港", "Dubai Port"],
+    "ports": ["AEJEA", "AEPRA"]
+  },
+  "GBLON": {
+    "aliases": ["伦敦港", "Port of London"],
+    "ports": ["GBLGP", "GBTIL"]
+  },
+  "IDJKT": {
+    "aliases": ["雅加达港", "Port of Jakarta"],
+    "ports": ["IDTPP"]
+  },
+  "IDBTH": {
+    "aliases": ["巴淡", "巴淡港", "Batam Port"],
+    "ports": ["IDBUR", "IDKAB", "IDSKP"]
   }
 }

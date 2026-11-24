@@ -46,6 +46,26 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     const shekouRes = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q: '深圳蛇口', endpoint: '1' })}`);
     assert.deepEqual((await shekouRes.json()).nodes.map((node) => node.id), ['CNSHK']);
 
+    for (const [q, parent, ports] of [
+      ['广州', 'CNCAN', ['CNNSA', 'CNHUA']],
+      ['上海', 'CNSHA', ['CNYAN']],
+      ['宁波舟山港', 'CNNGB', ['CNZOS']],
+      ['天津', 'CNTSN', ['CNXIP', 'CNTGU']],
+      ['迪拜', 'AEDXB', ['AEJEA', 'AEPRA']],
+      ['伦敦', 'GBLON', ['GBLGP', 'GBTIL']],
+      ['雅加达', 'IDJKT', ['IDTPP']],
+      ['巴淡岛', 'IDBTH', ['IDBUR', 'IDKAB', 'IDSKP']],
+    ]) {
+      const res = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q, endpoint: '1', limit: '8' })}`);
+      assert.equal(res.status, 200);
+      const { nodes } = await res.json();
+      assert.equal(nodes[0].id, parent, q);
+      assert.deepEqual(nodes.filter((node) => node.type === 'port' && node.id !== parent).map((node) => node.id).sort(), [...ports].sort(), q);
+    }
+
+    const yangshanRes = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q: '上海洋山', endpoint: '1' })}`);
+    assert.deepEqual((await yangshanRes.json()).nodes.map(({ id, name_zh }) => [id, name_zh]), [['CNYAN', '洋山港']]);
+
     const passageRes = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q: '苏伊士运河', endpoint: '1' })}`);
     assert.deepEqual((await passageRes.json()).nodes, []);
 
