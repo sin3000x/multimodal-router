@@ -424,6 +424,20 @@ function placeGraphLabel(item, boxW, boxH, width, height, placed, markerBoxes) {
   return null;
 }
 
+function drawWaypointLeader(ctx, { x, y }, box, radius, color) {
+  const edgeX = Math.max(box.x, Math.min(box.x + box.w, x));
+  const edgeY = Math.max(box.y, Math.min(box.y + box.h, y));
+  const distance = Math.hypot(edgeX - x, edgeY - y);
+  if (distance <= radius) return;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x + (edgeX - x) * radius / distance, y + (edgeY - y) * radius / distance);
+  ctx.lineTo(edgeX, edgeY);
+  ctx.stroke();
+}
+
 function drawWaypointLabels(ctx, items, tokens, cssW, cssH, graph = false) {
   const placed = [];
   const labels = [];
@@ -481,15 +495,7 @@ function drawWaypointLabels(ctx, items, tokens, cssW, cssH, graph = false) {
     labels.push({ wp, label, box: chosen, padX });
     if (graph) {
       item.labelBox = chosen;
-      const edgeX = Math.max(chosen.x, Math.min(chosen.x + chosen.w, x));
-      const edgeY = Math.max(chosen.y, Math.min(chosen.y + chosen.h, y));
-      ctx.strokeStyle = tokens.coast;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      const distance = Math.hypot(edgeX - x, edgeY - y);
-      ctx.moveTo(x + (edgeX - x) * item.radius / distance, y + (edgeY - y) * item.radius / distance);
-      ctx.lineTo(edgeX, edgeY);
-      ctx.stroke();
+      drawWaypointLeader(ctx, item, chosen, item.radius, tokens.coast);
     }
   }
 
@@ -504,6 +510,62 @@ function drawWaypointLabels(ctx, items, tokens, cssW, cssH, graph = false) {
 
     ctx.fillStyle = tokens.labelText;
     ctx.fillText(label, box.x + padX, box.y + box.h / 2 + 0.5);
+  }
+  ctx.restore();
+}
+
+function drawRouteWaypointLabels(ctx, tokens, width, height) {
+  const controls = document.querySelector('.map-controls');
+  const card = document.getElementById('map-route-card');
+  const boxes = [controls, card].filter((element) => element.offsetWidth).map((element) => ({
+    x: element.offsetLeft, y: element.offsetTop, w: element.offsetWidth, h: element.offsetHeight,
+  }));
+  for (const { x, y } of renderedMarkers) {
+    boxes.push({ x: x - 12, y: y - 12, w: 24, h: 24 });
+  }
+
+  const endpointsFirst = ({ wp }) => Number(wp.role === 'origin' || wp.role === 'destination');
+  const markers = [...renderedMarkers].sort((a, b) => endpointsFirst(b) - endpointsFirst(a));
+  ctx.save();
+  ctx.font = '600 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.fillStyle = tokens.labelText;
+
+  for (const marker of markers) {
+    const { wp, x, y } = marker;
+    if (x < 0 || x > width || y < 0 || y > height) continue;
+
+    const label = nodeLabel(wp);
+    const w = Math.ceil(ctx.measureText(label).width) + 6;
+    const h = 16;
+    const center = Math.max(4, Math.min(width - w - 4, x - w / 2));
+    const middle = y - h / 2;
+    const positions = [16, 28, 44, 64].flatMap((gap) => {
+      const right = x + gap;
+      const left = x - gap - w;
+      const top = y - gap - h;
+      const bottom = y + gap;
+      return [
+        [right, middle], [left, middle], [center, top], [center, bottom],
+        [right, top], [left, top], [right, bottom], [left, bottom],
+      ];
+    });
+    const box = positions.map(([x, y]) => ({ x, y, w, h })).find((candidate) =>
+      candidate.x >= 4 && candidate.y >= 4 && candidate.x + w <= width - 4 &&
+      candidate.y + h <= height - 4 && !boxes.some((box) => boxesOverlap(candidate, box, 2)) &&
+      !routesIntersectBox(candidate.x, candidate.y, w, h, 6)
+    );
+
+    if (!box) continue;
+
+    boxes.push(box);
+    marker.labelBox = box;
+    drawWaypointLeader(ctx, marker, box, marker.radius, tokens.coast);
+    ctx.strokeStyle = tokens.labelBg;
+    ctx.lineWidth = 2.5;
+    ctx.strokeText(label, box.x + 3, box.y + h / 2);
+    ctx.fillText(label, box.x + 3, box.y + h / 2);
   }
   ctx.restore();
 }
@@ -776,10 +838,16 @@ function drawWorldMap(routes, highlightedId) {
     const mxCopy = nearestCopyMx(lonToMx(wp.lon));
     const [x, y] = projectRaw(mxCopy, latToMy(wp.lat), cssW, cssH);
     const isBlocked = Boolean(compareModel?.avoidSet.has(wp.id));
-    renderedMarkers.push({ wp, x, y });
+    const radius = isBlocked || wp.role === 'origin' || wp.role === 'destination' ? 8 : 6;
+    renderedMarkers.push({ wp, x, y, radius });
     drawWaypointMarker(ctx, wp, x, y, activeColor, wp.id === hoveredWaypointId, isBlocked);
   }
-  positionRouteCard(cssW, cssH, activeColor);
+  if (!positionRouteCard(cssW, cssH, activeColor)) {
+    clampView();
+    drawWorldMap(routes, highlightedId);
+    return;
+  }
+  drawRouteWaypointLabels(ctx, tokens, cssW, cssH);
 }
 
 function closestPointOnSegment(x, y, [ax, ay], [bx, by]) {
@@ -841,8 +909,7 @@ function routeCardAnchor(width, height) {
   return marker ? [marker.x, marker.y] : null;
 }
 
-function cardIntersectsRoutes(x, y, width, height) {
-  const padding = 8;
+function routesIntersectBox(x, y, width, height, padding) {
   const left = x - padding;
   const right = x + width + padding;
   const top = y - padding;
@@ -866,7 +933,7 @@ function positionRouteCard(width, height, color) {
   const anchor = cardOpen ? routeCardAnchor(width, height) : null;
   const visible = cardOpen && (anchor || docked);
   card.classList.toggle('hidden', !visible);
-  if (!visible) return;
+  if (!visible) return true;
 
   const [x, y] = anchor ?? [width, height / 2];
   const { offsetWidth: cardWidth, offsetHeight: cardHeight } = card;
@@ -889,12 +956,10 @@ function positionRouteCard(width, height, color) {
       [minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY],
     ];
     position = candidates.find(([left, top]) => left >= minX && left <= maxX &&
-      top >= minY && top <= maxY && !cardIntersectsRoutes(left, top, cardWidth, cardHeight));
+      top >= minY && top <= maxY && !routesIntersectBox(left, top, cardWidth, cardHeight, 8));
     if (!position) {
       stage.classList.add('route-card-docked');
-      clampView();
-      drawWorldMap(currentRoutes, activeRouteId);
-      return;
+      return false;
     }
   }
 
@@ -902,6 +967,7 @@ function positionRouteCard(width, height, color) {
   card.style.left = `${cardX + 1}px`;
   card.style.top = `${cardY + 1}px`;
   card.style.setProperty('--route-color', color);
+  return true;
 }
 
 function mapTargetAt(x, y, pointerType) {
@@ -941,18 +1007,10 @@ function legSummary(leg) {
   return `${MODE_LABELS[leg.mode] || leg.mode} · ${leg.fromName} → ${leg.toName} · ${leg.distanceKm} km`;
 }
 
-function setRouteNodeInfo(text = '') {
-  const info = document.getElementById('route-node-info');
-  info.classList.toggle('has-node', Boolean(text));
-  info.textContent = text || '悬停或点击地图上的节点查看名称';
-  info.title = text;
-}
-
 function clearMapHover() {
   const changed = Boolean(hoveredWaypointId || hoveredLeg);
   hoveredWaypointId = null;
   hoveredLeg = null;
-  setRouteNodeInfo();
   document.getElementById('map-tooltip').classList.add('hidden');
   document.getElementById('world-map').classList.remove('map-target');
   return changed;
@@ -982,21 +1040,14 @@ function initMapInteractions() {
     if (changed) drawWorldMap(currentRoutes, activeRouteId);
 
     canvas.classList.toggle('map-target', Boolean(target));
-    const isRouteNode = Boolean(waypoint && view !== graphView);
-    tooltip.classList.toggle('hidden', !target || isRouteNode);
-    if (changed && view !== graphView && !isRouteNode) setRouteNodeInfo();
+    tooltip.classList.toggle('hidden', !target);
     if (!target) return;
 
     if (waypoint) {
       const role = waypoint.groups?.map((group) => NODE_GROUPS[group].label).join(' / ')
         || ROLE_LABELS[waypoint.role] || waypoint.type;
       const blockedSuffix = compareModel?.avoidSet.has(waypoint.id) ? ' · 已受阻' : '';
-      const text = `${nodeLabel(waypoint)} · ${role}${blockedSuffix}`;
-      if (isRouteNode) {
-        if (changed) setRouteNodeInfo(text);
-        return;
-      }
-      tooltip.textContent = text;
+      tooltip.textContent = `${nodeLabel(waypoint)} · ${role}${blockedSuffix}`;
     } else {
       const prefix = target.route?.compareRole
         ? `[${COMPARE_ROLE_META[target.route.compareRole].label}] `
