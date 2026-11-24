@@ -70,14 +70,19 @@
         </section>
 
         <section class="panel">
-          <h2>咽喉 / 空域受阻模拟 (Avoid)</h2>
+          <div class="panel-head">
+            <h2>咽喉 / 空域受阻模拟 (Avoid)</h2>
+            <div id="avoid-meta" class="avoid-meta hidden">
+              <span id="avoid-count" class="avoid-count"></span>
+              <button id="clear-avoid-btn" type="button" class="link-btn">清空</button>
+            </div>
+          </div>
           <div id="chokepoint-list" class="chokepoint-list"></div>
         </section>
       </div>
 
       <div class="actions">
         <button id="run-btn" type="button" class="primary-btn">计算多式联运路径</button>
-        <button id="compare-btn" type="button" class="secondary-btn">基线 vs 绕行对比</button>
       </div>
     </aside>
 

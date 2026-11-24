@@ -1655,13 +1655,10 @@ function syncCompareSelection() {
 function renderComparePanel() {
   const mapPanel = document.getElementById('map-panel');
   const panel = document.getElementById('compare-panel');
-  const compareBtn = document.getElementById('compare-btn');
   const active = Boolean(compareModel);
 
   mapPanel.dataset.compare = String(active);
   panel.classList.toggle('hidden', !active);
-  compareBtn.classList.toggle('is-active', active);
-  compareBtn.setAttribute('aria-pressed', String(active));
   if (!active) return;
 
   panel.classList.toggle('collapsed', compareCollapsed);
@@ -1892,7 +1889,17 @@ function renderRoutes(routes, { initialRouteId = null } = {}) {
   selectRoute(initialRouteId ?? routes[0]?.routeId ?? null);
 }
 
-async function runQuery(isCompare = false) {
+function updateActionButton() {
+  const avoidCount = selectedAvoid().length;
+  document.getElementById('run-btn').textContent =
+    avoidCount > 0 ? '分析绕行影响（基线 vs 绕行）' : '计算多式联运路径';
+  document.getElementById('avoid-meta').classList.toggle('hidden', avoidCount === 0);
+  if (avoidCount > 0) {
+    document.getElementById('avoid-count').textContent = `已选 ${avoidCount} 项`;
+  }
+}
+
+async function runQuery() {
   setMapView(routeView);
   const from = endpointPickers.from.value;
   const to = endpointPickers.to.value;
@@ -1905,6 +1912,7 @@ async function runQuery(isCompare = false) {
   }
   const modes = selectedModes();
   const avoid = selectedAvoid();
+  const isCompare = avoid.length > 0;
 
   const endpoint = isCompare ? '/v1/routes/compare' : '/v1/routes';
   let data;
@@ -1995,7 +2003,7 @@ async function init() {
         const label = btn.querySelector(`[data-${endpoint}]`);
         endpointPickers[endpoint].setNode({ id: label.dataset[endpoint], name_zh: label.textContent });
       }
-      runQuery(false);
+      runQuery();
     };
   }
 
@@ -2013,10 +2021,18 @@ async function init() {
     renderComparePanel();
   };
 
-  document.getElementById('run-btn').onclick = () => runQuery(false);
-  document.getElementById('compare-btn').onclick = () => runQuery(true);
+  cpList.addEventListener('change', updateActionButton);
+  document.getElementById('clear-avoid-btn').onclick = () => {
+    for (const el of document.querySelectorAll('input[name="avoid"]:checked')) {
+      el.checked = false;
+    }
+    updateActionButton();
+    runQuery();
+  };
+  document.getElementById('run-btn').onclick = () => runQuery();
 
-  await runQuery(false);
+  updateActionButton();
+  await runQuery();
 }
 
 const endpointPickers = Object.fromEntries(['from', 'to'].map((key) => [
