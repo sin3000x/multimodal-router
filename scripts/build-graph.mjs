@@ -3,6 +3,8 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decimateCoords, haversineKm, normalizeLon } from '../src/engine/geo.mjs';
+import endpointNamesZh from '../data/curated/endpoint-names-zh.json' with { type: 'json' };
+import publicNodeNamesZh from '../data/curated/public-node-names-zh.json' with { type: 'json' };
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const RAW_DIR = join(ROOT_DIR, 'data', 'raw');
@@ -443,7 +445,7 @@ async function main() {
       functions: [seed.type],
       code,
       codeStandard,
-      name_zh: seed.name_zh ?? seed.name_en ?? id,
+      name_zh: seed.name_zh,
       name_en: seed.name_en ?? seed.name_zh ?? id,
       country: seed.country ?? '',
       region: seed.region ?? null,
@@ -546,7 +548,6 @@ async function main() {
       functions: ['port'],
       code: locode,
       codeStandard: 'UN/LOCODE',
-      name_zh: props.name || locode,
       name_en: props.name || locode,
       country,
       lon: +lon.toFixed(4),
@@ -580,7 +581,6 @@ async function main() {
       functions: ['airport'],
       code: iata,
       codeStandard: 'IATA',
-      name_zh: row.name,
       name_en: row.name,
       country: row.iso_country ?? '',
       municipality: row.municipality ?? '',
@@ -615,6 +615,20 @@ async function main() {
   }
 
   const nodes = [...nodesById.values()];
+  const missingChineseNames = [];
+  for (const node of nodes) {
+    const nameZh = [node.name_zh, endpointNamesZh[node.id]?.[0], publicNodeNamesZh[node.id]]
+      .find((name) => /\p{Script=Han}/u.test(name ?? ''));
+    if (nameZh) {
+      node.name_zh = nameZh;
+    } else {
+      missingChineseNames.push(`${node.id} (${node.name_en})`);
+    }
+  }
+  if (missingChineseNames.length) {
+    throw new Error(`Missing Chinese node names:\n${missingChineseNames.join('\n')}`);
+  }
+
   const payload = {
     nodes,
     chokepoints: chokepointsCfg,

@@ -13,6 +13,7 @@
   - `chokepoints.json`：规范咽喉与空域映射（含 `CP_SUEZ` / `CP_BAB` 耦合与 `AS_RUSSIA` / `AS_MIDEAST` 大圆航线穿行检测盒）。
   - `rail-land-corridors.json`：中欧班列北线（`CNALA` 阿拉山口 / `RB_KHORGOS` 霍尔果斯）、西伯利亚线（`CNMZH` 满洲里）、跨里海中间走廊（`KZAAU` 阿克套 - `AZBAK` 巴库渡运 - `GETBS` 第比利斯）及重点港口陆铁接驳。
   - `seed-nodes.json` & `cohort-od.json`：兼容 `supply-chain-risk-radar` 的业务节点与 87 条重点线路 OD 队列。
+  - `public-node-names-zh.json`：按 UN/LOCODE 或 IATA 代码维护公开港口和机场的中文译名。更新公开数据后，构建会列出仍需补充中文名的节点。
 
 ## 节点编号规范（复用国际标准代码）
 

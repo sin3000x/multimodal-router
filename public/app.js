@@ -1,4 +1,5 @@
 import { createEndpointPicker } from './endpoint-picker.js';
+import { GRAPH_MAX_ZOOM, GRAPH_ZOOM_INPUT } from './map-config.js';
 
 const KEY_AVOID_IDS = new Set([
   'CP_SUEZ',
@@ -30,6 +31,15 @@ const NODE_GROUPS = {
 };
 const NODE_SHORT_NAMES = { HKG: '香港机场', PVG: '上海浦东机场' };
 const THEME_KEY = 'mmr-theme';
+const GRAPH_DETAIL_ZOOM = 8;
+const ROUTE_ZOOM_INPUT = {
+  wheelSensitivity: 0.0016,
+  pinchWheelSensitivity: 0.0045,
+  maxWheelStep: 0.16,
+  pinchExponent: 0.72,
+  buttonFactor: 1.5,
+  doubleClickFactor: 1.6,
+};
 
 let worldGeo = null;
 let currentRoutes = [];
@@ -175,7 +185,8 @@ function wrapUnit(u) {
 }
 
 function clampZoom(zoom, aspect) {
-  return Math.max(Math.min(0.8, 0.76 * aspect), Math.min(12, zoom));
+  const maxZoom = view === graphView ? GRAPH_MAX_ZOOM : 12;
+  return Math.max(Math.min(0.8, 0.76 * aspect), Math.min(maxZoom, zoom));
 }
 
 function clampView() {
@@ -340,10 +351,44 @@ function drawWaypointMarker(ctx, wp, x, y, modeColor, isHovered) {
   ctx.restore();
 }
 
-function drawWaypointLabels(ctx, items, tokens, cssW, cssH) {
+function placeGraphLabel(item, boxW, boxH, width, height, placed, markerBoxes) {
+  const { x, y } = item;
+  const gap = 12;
+  const right = x + gap;
+  const left = x - gap - boxW;
+  const center = x - boxW / 2;
+  const middle = y - boxH / 2;
+  const positions = [[right, middle], [left, middle], [center, y - gap - boxH], [center, y + gap]];
+
+  // At close range, stack callouts when several nodes share the same coordinates.
+  if (view.zoom >= GRAPH_DETAIL_ZOOM * 4) {
+    for (let row = 1; row <= 4; row++) {
+      const offset = row * (boxH + 5);
+      positions.push([right, middle - offset], [right, middle + offset],
+        [left, middle - offset], [left, middle + offset]);
+    }
+  }
+
+  for (const [px, py] of positions) {
+    const box = {
+      x: Math.max(4, Math.min(width - boxW - 4, px)),
+      y: Math.max(4, Math.min(height - boxH - 4, py)),
+      w: boxW,
+      h: boxH,
+    };
+    if (!markerBoxes.some((marker) => boxesOverlap(box, marker, 1)) &&
+        !placed.some((label) => boxesOverlap(box, label, 4))) return box;
+  }
+  return null;
+}
+
+function drawWaypointLabels(ctx, items, tokens, cssW, cssH, graph = false) {
   const placed = [];
+  const labels = [];
+  // Allow room for highlighted dots without moving their labels when hovered.
+  const markerBoxes = graph ? items.map(({ x, y }) => ({ x: x - 7, y: y - 7, w: 14, h: 14 })) : [];
   const priority = { origin: 0, destination: 0, chokepoint: 1, border: 2, gateway: 3, hub: 4 };
-  const sorted = [...items].sort(
+  const sorted = graph ? items : [...items].sort(
     (a, b) => (priority[a.wp.role] ?? 5) - (priority[b.wp.role] ?? 5)
   );
 
@@ -368,13 +413,15 @@ function drawWaypointLabels(ctx, items, tokens, cssW, cssH) {
       [-boxW / 2, 10],
     ];
 
-    let chosen = null;
-    for (const [dx, dy] of offsets) {
-      const box = { x: x + dx, y: y + dy, w: boxW, h: boxH };
-      if (box.x < 4 || box.x + box.w > cssW - 4 || box.y < 4 || box.y + box.h > cssH - 4) continue;
-      if (!placed.some((p) => boxesOverlap(box, p, 4))) {
-        chosen = box;
-        break;
+    let chosen = graph ? placeGraphLabel(item, boxW, boxH, cssW, cssH, placed, markerBoxes) : null;
+    if (!graph) {
+      for (const [dx, dy] of offsets) {
+        const box = { x: x + dx, y: y + dy, w: boxW, h: boxH };
+        if (box.x < 4 || box.x + box.w > cssW - 4 || box.y < 4 || box.y + box.h > cssH - 4) continue;
+        if (!placed.some((p) => boxesOverlap(box, p, 4))) {
+          chosen = box;
+          break;
+        }
       }
     }
 
@@ -389,16 +436,32 @@ function drawWaypointLabels(ctx, items, tokens, cssW, cssH) {
     if (!chosen) continue;
 
     placed.push(chosen);
+    labels.push({ wp, label, box: chosen, padX });
+    if (graph) {
+      item.labelBox = chosen;
+      const edgeX = Math.max(chosen.x, Math.min(chosen.x + chosen.w, x));
+      const edgeY = Math.max(chosen.y, Math.min(chosen.y + chosen.h, y));
+      ctx.strokeStyle = tokens.coast;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      const distance = Math.hypot(edgeX - x, edgeY - y);
+      ctx.moveTo(x + (edgeX - x) * item.radius / distance, y + (edgeY - y) * item.radius / distance);
+      ctx.lineTo(edgeX, edgeY);
+      ctx.stroke();
+    }
+  }
+
+  for (const { wp, label, box, padX } of labels) {
     ctx.fillStyle = tokens.labelBg;
     ctx.strokeStyle = wp.id === hoveredWaypointId ? tokens.modes.sea : tokens.labelBorder;
     ctx.lineWidth = wp.id === hoveredWaypointId ? 1.5 : 1;
     ctx.beginPath();
-    ctx.roundRect(chosen.x, chosen.y, chosen.w, chosen.h, 5);
+    ctx.roundRect(box.x, box.y, box.w, box.h, 5);
     ctx.fill();
     ctx.stroke();
 
     ctx.fillStyle = tokens.labelText;
-    ctx.fillText(label, chosen.x + padX, chosen.y + chosen.h / 2 + 0.5);
+    ctx.fillText(label, box.x + padX, box.y + box.h / 2 + 0.5);
   }
   ctx.restore();
 }
@@ -446,7 +509,7 @@ function getGraphMarkers(width, filter) {
   for (const node of graphNodes) {
     const selected = node === selectedGraphNode;
     if (!selected && ((filter && !node.groups.includes(filter)) || (zoom < 2 && !node.featured))) continue;
-    if (selected || zoom >= 8) {
+    if (selected || zoom >= GRAPH_DETAIL_ZOOM) {
       markers.push({ wp: node, mx: node.mx, my: node.my });
       continue;
     }
@@ -503,8 +566,10 @@ function drawNodeGraph(ctx, tokens, width, height) {
     renderedMarkers.push({ ...marker, radius });
   }
   ctx.restore();
-  drawWaypointLabels(ctx, renderedMarkers.filter(({ wp }) =>
-    wp && (wp === selectedGraphNode || wp.id === hoveredWaypointId)), tokens, width, height);
+  const detailed = view.zoom >= GRAPH_DETAIL_ZOOM;
+  const labeled = renderedMarkers.filter(({ wp }) =>
+    wp && (detailed || wp === selectedGraphNode || wp.id === hoveredWaypointId));
+  drawWaypointLabels(ctx, labeled, tokens, width, height, detailed);
 }
 
 function drawWorldMap(routes, highlightedId) {
@@ -771,6 +836,8 @@ function mapTargetAt(x, y, pointerType) {
   let bestDistance = radius ** 2;
   for (let i = renderedMarkers.length - 1; i >= 0; i--) {
     const item = renderedMarkers[i];
+    const box = item.labelBox;
+    if (box && x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h) return item;
     const distance = (item.x - x) ** 2 + (item.y - y) ** 2;
     const hitRadius = Math.max(radius, item.radius || 0);
     if (distance < hitRadius ** 2 && (!marker || distance < bestDistance)) {
@@ -816,6 +883,7 @@ function initMapInteractions() {
   const stage = panel.querySelector('.map-stage');
   let gesture = null;
   let pinchScale = null;
+  const zoomInput = () => view === graphView ? GRAPH_ZOOM_INPUT : ROUTE_ZOOM_INPUT;
 
   function cssPoint(e) {
     const rect = canvas.getBoundingClientRect();
@@ -855,7 +923,7 @@ function initMapInteractions() {
     const mxUnder = view.centerMx + (x - m.cssW / 2) / oldWorldPx;
     const myUnder = view.centerMy + (y - m.cssH / 2) / oldWorldPx;
 
-    view.zoom = Math.max(Math.min(1, view.zoom), Math.min(12, view.zoom * factor));
+    view.zoom = Math.max(Math.min(1, view.zoom), clampZoom(view.zoom * factor, m.cssH / m.cssW));
     const newWorldPx = m.cssW * view.zoom;
     view.centerMx = mxUnder - (x - m.cssW / 2) / newWorldPx;
     view.centerMy = myUnder - (y - m.cssH / 2) / newWorldPx;
@@ -872,8 +940,9 @@ function initMapInteractions() {
       : unit === WheelEvent.DOM_DELTA_PAGE ? canvas.clientHeight : 1;
     const delta = e.deltaY * pixelsPerUnit;
     if (!delta) return;
-    const sensitivity = e.ctrlKey ? 0.0045 : 0.0016;
-    const step = Math.max(-0.16, Math.min(0.16, -delta * sensitivity));
+    const { wheelSensitivity, pinchWheelSensitivity, maxWheelStep } = zoomInput();
+    const sensitivity = e.ctrlKey ? pinchWheelSensitivity : wheelSensitivity;
+    const step = Math.max(-maxWheelStep, Math.min(maxWheelStep, -delta * sensitivity));
     const { x, y } = cssPoint(e);
     zoomAt(Math.exp(step), x, y);
   }, { passive: false });
@@ -886,7 +955,7 @@ function initMapInteractions() {
   canvas.addEventListener('gesturechange', (e) => {
     e.preventDefault();
     if (pinchScale === null || !Number.isFinite(e.scale) || e.scale <= 0) return;
-    const factor = (e.scale / pinchScale) ** 0.72;
+    const factor = (e.scale / pinchScale) ** zoomInput().pinchExponent;
     pinchScale = e.scale;
     const { x, y } = Number.isFinite(e.clientX) && Number.isFinite(e.clientY)
       ? cssPoint(e)
@@ -900,7 +969,7 @@ function initMapInteractions() {
 
   canvas.addEventListener('dblclick', (e) => {
     const { x, y } = cssPoint(e);
-    zoomAt(1.6, x, y);
+    zoomAt(zoomInput().doubleClickFactor, x, y);
   });
 
   canvas.addEventListener('pointerdown', (e) => {
@@ -979,11 +1048,11 @@ function initMapInteractions() {
 
   document.getElementById('zoom-in-btn').onclick = () => {
     const m = getCanvasMetrics();
-    if (m) zoomAt(1.5, m.cssW / 2, m.cssH / 2);
+    if (m) zoomAt(zoomInput().buttonFactor, m.cssW / 2, m.cssH / 2);
   };
   document.getElementById('zoom-out-btn').onclick = () => {
     const m = getCanvasMetrics();
-    if (m) zoomAt(1 / 1.5, m.cssW / 2, m.cssH / 2);
+    if (m) zoomAt(1 / zoomInput().buttonFactor, m.cssW / 2, m.cssH / 2);
   };
   function fitSelectedRoute() {
     const active = currentRoutes.find((r) => r.routeId === activeRouteId);
@@ -1080,7 +1149,7 @@ function selectGraphNode(node, recenter = false) {
     ].filter(Boolean).join(' · ');
     document.getElementById('graph-endpoints').classList.toggle('hidden', node.groups.includes('passage'));
     if (recenter) {
-      view.zoom = Math.max(view.zoom, 8);
+      view.zoom = Math.max(view.zoom, GRAPH_DETAIL_ZOOM);
       view.centerMx = node.mx;
       view.centerMy = node.my;
       clampView();
@@ -1172,7 +1241,7 @@ function initNodeGraph() {
         searchTerms: [node.id, node.code, node.name_zh, node.name_en, NODE_SHORT_NAMES[node.id], ...(node.aliases || [])]
           .filter(Boolean).map((term) => term.toLowerCase()),
       }));
-      status.textContent = `${nodes.length.toLocaleString('zh-CN')} 个节点 · 放大查看全部`;
+      status.textContent = `${nodes.length.toLocaleString('zh-CN')} 个节点 · 放大显示名称`;
       if (view === graphView) updateGraphSearch();
       drawWorldMap(currentRoutes, activeRouteId);
     } catch {
@@ -1189,7 +1258,7 @@ function initNodeGraph() {
       try {
         const { sea, land } = await linksRequest;
         graphLinks = { sea: prepareGraphLinks(sea), land: prepareGraphLinks(land) };
-        status.textContent = graphNodes ? `${graphNodes.length.toLocaleString('zh-CN')} 个节点 · 放大查看全部` : '';
+        status.textContent = graphNodes ? `${graphNodes.length.toLocaleString('zh-CN')} 个节点 · 放大显示名称` : '';
       } catch {
         seaLayer.checked = false;
         landLayer.checked = false;

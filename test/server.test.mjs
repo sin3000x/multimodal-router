@@ -54,7 +54,7 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
       ['迪拜', 'AEDXB', ['AEJEA', 'AEPRA']],
       ['伦敦', 'GBLON', ['GBLGP', 'GBTIL']],
       ['雅加达', 'IDJKT', ['IDTPP']],
-      ['巴淡岛', 'IDBTH', ['IDBUR', 'IDKAB', 'IDSKP']],
+      ['巴淡岛', 'IDBTH', ['IDBUR', 'IDKAB', 'IDPBA', 'IDSKP']],
     ]) {
       const res = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q, endpoint: '1', limit: '8' })}`);
       assert.equal(res.status, 200);
@@ -67,7 +67,7 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     assert.deepEqual((await yangshanRes.json()).nodes.map(({ id, name_zh }) => [id, name_zh]), [['CNYAN', '洋山港']]);
 
     const passageRes = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q: '苏伊士运河', endpoint: '1' })}`);
-    assert.deepEqual((await passageRes.json()).nodes, []);
+    assert.ok(!(await passageRes.json()).nodes.some(({ id }) => id === 'CP_SUEZ'));
 
     const graphNodesRes = await fetch(`${baseUrl}/v1/graph/nodes`);
     assert.equal(graphNodesRes.status, 200);
@@ -76,6 +76,13 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     assert.ok(graphNodes.nodes.length > 100);
     assert.ok(graphNodes.nodes.some((node) => node.id === 'PVG' && node.type === 'airport'));
     assert.ok(graphNodes.nodes.every((node) => Number.isFinite(node.lon) && Number.isFinite(node.lat)));
+    assert.deepEqual(graphNodes.nodes.filter(({ name_zh }) => !/\p{Script=Han}/u.test(name_zh ?? '')).map(({ id }) => id), []);
+
+    for (const q of ['霍尼亚拉国际机场', 'Honiara International Airport', 'HIR']) {
+      const res = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q, endpoint: '1' })}`);
+      const { nodes } = await res.json();
+      assert.ok(nodes.some(({ id, name_zh }) => id === 'HIR' && name_zh === '霍尼亚拉国际机场'), q);
+    }
 
     const graphLinksRes = await fetch(`${baseUrl}/v1/graph/links`);
     assert.equal(graphLinksRes.status, 200);
