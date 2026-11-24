@@ -76,7 +76,7 @@ test('CNSZX -> NLAMS returns Suez sea, Cape sea detour, air, and China-Europe ra
   assert.ok(seaRoutes[0].waypoints.some((w) => w.role === 'chokepoint' && w.id === 'CP_SUEZ'));
 });
 
-test('CNSZX -> AEDXB with avoid CP_HORMUZ uses bypass port outside Hormuz and reports comparison', () => {
+test('CNSZX -> AEDXB with avoid CP_HORMUZ uses Jebel Ali as baseline and bypasses via east-coast port', () => {
   const cmp = router.compareDisruption({
     from: '深圳',
     to: '迪拜',
@@ -86,6 +86,19 @@ test('CNSZX -> AEDXB with avoid CP_HORMUZ uses bypass port outside Hormuz and re
 
   assert.equal(cmp.origin.id, 'CNSZX');
   assert.equal(cmp.destination.id, 'AEDXB');
+
+  const baseSea = cmp.baseline.filter((r) => r.mode === 'sea');
+  assert.ok(baseSea.length >= 2, 'should have baseline sea routes');
+  assert.equal(baseSea[0].destGateway.id, 'AEJEA', 'primary baseline port for Dubai should be Jebel Ali (AEJEA)');
+  assert.ok(
+    baseSea[0].chokepoints.some((c) => c.id === 'CP_HORMUZ'),
+    'primary baseline for Dubai should cross CP_HORMUZ'
+  );
+  assert.ok(
+    !baseSea.some((r) => r.destGateway.id === 'AEMSA'),
+    'should not surface minor bulk port AEMSA when major hubs exist'
+  );
+
   assert.ok(
     cmp.affected.some((r) => r.chokepoints.some((c) => c.id === 'CP_HORMUZ')),
     'baseline should cross CP_HORMUZ'
@@ -93,11 +106,23 @@ test('CNSZX -> AEDXB with avoid CP_HORMUZ uses bypass port outside Hormuz and re
   const altSea = cmp.alternatives.filter((r) => r.mode === 'sea');
   assert.ok(altSea.length >= 1, 'should discover sea port outside Hormuz');
   assert.ok(
+    ['AEKLF', 'AEFJR'].includes(altSea[0].destGateway.id),
+    `expected UAE east-coast bypass port, got ${altSea[0].destGateway.id}`
+  );
+  assert.ok(
     altSea.every((r) => !r.chokepoints.some((c) => c.id === 'CP_HORMUZ')),
     'surviving sea route must not cross CP_HORMUZ'
   );
-  assert.equal(typeof altSea[0].deltaDays, 'number');
-  assert.equal(typeof altSea[0].costMultiplier, 'number');
+  assert.ok(altSea[0].deltaDays > 0, `expected positive detour delay, got ${altSea[0].deltaDays}`);
+  assert.ok(altSea[0].costMultiplier > 1, `expected cost increase on detour, got ${altSea[0].costMultiplier}`);
+});
+
+test('Major destination cities select realistic primary maritime hubs', () => {
+  const lonSea = router.findRoutes({ from: 'CNSZX', to: 'GBLON', modes: ['sea'], maxRoutes: 6 }).routes;
+  assert.equal(lonSea[0].destGateway.id, 'GBLGP', 'London primary gateway should be London Gateway (GBLGP)');
+
+  const ruhSea = router.findRoutes({ from: 'CNSZX', to: 'SARUH', modes: ['sea'], maxRoutes: 6 }).routes;
+  assert.equal(ruhSea[0].destGateway.id, 'SADMM', 'Riyadh primary gateway should be Dammam rail corridor (SADMM)');
 });
 
 test('Trans-Pacific CNSZX -> MXMEX crosses antimeridian cleanly and offers Panama east-coast option', () => {

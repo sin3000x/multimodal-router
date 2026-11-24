@@ -43,15 +43,36 @@ export const MODE_PROFILES = {
   },
 };
 
-export function estimateLegMetrics(leg, { isTransfer = false } = {}) {
+export function estimateLegMetrics(
+  leg,
+  { isTransfer = false, isRemoteAlternate = false, isSecondaryPort = false } = {}
+) {
   const mode = leg.mode || 'road';
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.road;
   const dist = Math.max(0, Number(leg.distanceKm) || 0);
 
-  // Drayage legs on sea/rail routes add minimal border/terminal overhead (sea/rail main leg holds port dwell)
+  // Drayage legs on sea/rail routes: differentiate rail corridors, cross-region alternate ports, and local home-port drayage
   if (leg.kind === 'drayage') {
-    const days = dist / 55 / 24 + 0.25;
-    const cost = (dist / 1000) * 4.5 + 0.3;
+    if (leg.mode === 'rail') {
+      const days = dist / 50 / 24 + 0.35;
+      const cost = (dist / 1000) * 3.8 + 0.35;
+      return {
+        distanceKm: +dist.toFixed(1),
+        transitDays: +days.toFixed(2),
+        costIndex: +cost.toFixed(2),
+      };
+    }
+    if (isRemoteAlternate) {
+      const days = dist / 45 / 24 + 0.9;
+      const cost = (dist / 1000) * 14.0 + 1.1;
+      return {
+        distanceKm: +dist.toFixed(1),
+        transitDays: +days.toFixed(2),
+        costIndex: +cost.toFixed(2),
+      };
+    }
+    const days = dist / 50 / 24 + 0.25;
+    const cost = (dist / 1000) * 8.0 + 0.35;
     return {
       distanceKm: +dist.toFixed(1),
       transitDays: +days.toFixed(2),
@@ -66,9 +87,15 @@ export function estimateLegMetrics(leg, { isTransfer = false } = {}) {
   if (mode === 'rail' && leg.hasFerry) {
     dwellDays += 0.8; // Caspian Sea Ro-Ro ferry transfer overhead
   }
+  if (mode === 'sea' && isSecondaryPort) {
+    dwellDays += 0.5;
+  }
 
   const days = dist / profile.speedKmh / 24 + dwellDays;
-  const baseCost = isTransfer && profile.transferCost != null ? profile.transferCost : profile.baseCost;
+  let baseCost = isTransfer && profile.transferCost != null ? profile.transferCost : profile.baseCost;
+  if (mode === 'sea' && isSecondaryPort) {
+    baseCost += 0.6;
+  }
   const cost = (dist / 1000) * profile.costPer1000Km + baseCost;
 
   return {
@@ -78,18 +105,19 @@ export function estimateLegMetrics(leg, { isTransfer = false } = {}) {
   };
 }
 
-export function scoreRoute(primaryMode, legs, { chokepointCount = 0 } = {}) {
+export function scoreRoute(primaryMode, legs, { chokepointCount = 0, legOptions = [] } = {}) {
   const profile = MODE_PROFILES[primaryMode] ?? MODE_PROFILES.road;
   let totalDist = 0;
   let totalDays = 0;
   let totalCost = 0;
   let mainLegIndex = 0;
 
-  for (const leg of legs) {
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i];
     const isMain = leg.kind !== 'drayage';
     const isTransfer = isMain && mainLegIndex > 0;
     if (isMain) mainLegIndex++;
-    const m = estimateLegMetrics(leg, { isTransfer });
+    const m = estimateLegMetrics(leg, { isTransfer, ...(legOptions[i] ?? {}) });
     totalDist += m.distanceKm;
     totalDays += m.transitDays;
     totalCost += m.costIndex;

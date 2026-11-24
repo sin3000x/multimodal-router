@@ -71,7 +71,7 @@ export function createRouter(compiledGraph) {
     }
   }
 
-  const routeSea = createSeaRouter(compiledGraph, landConnectionsByNode);
+  const routeSea = createSeaRouter(compiledGraph, landConnectionsByNode, portGroups);
   const routeAir = createAirRouter(compiledGraph);
   const routeLand = createLandRouter(compiledGraph);
 

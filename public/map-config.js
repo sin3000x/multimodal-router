@@ -1,4 +1,5 @@
 export const GRAPH_MAX_ZOOM = 200;
+export const ROUTE_MAX_ZOOM = 200;
 
 export const GRAPH_ZOOM_INPUT = {
   wheelSensitivity: 0.0035,

@@ -32,7 +32,7 @@
             <label for="from-input">起运地</label>
             <input id="from-input" role="combobox" aria-autocomplete="list" aria-expanded="false"
               aria-controls="from-options" autocomplete="off" spellcheck="false"
-              value="CNSZX" placeholder="例如 深圳、盐田港、SZX" />
+              value="深圳（CNSZX）" data-node-id="CNSZX" placeholder="例如 深圳、盐田港、SZX" />
             <div class="endpoint-dropdown" hidden>
               <div id="from-options" role="listbox" aria-label="起运地候选"></div>
               <div class="endpoint-message" aria-hidden="true"></div>
@@ -43,7 +43,7 @@
             <label for="to-input">目的地</label>
             <input id="to-input" role="combobox" aria-autocomplete="list" aria-expanded="false"
               aria-controls="to-options" autocomplete="off" spellcheck="false"
-              value="NLAMS" placeholder="例如 阿姆斯特丹、迪拜、NLAMS" />
+              value="阿姆斯特丹（NLAMS）" data-node-id="NLAMS" placeholder="例如 阿姆斯特丹、迪拜、NLAMS" />
             <div class="endpoint-dropdown" hidden>
               <div id="to-options" role="listbox" aria-label="目的地候选"></div>
               <div class="endpoint-message" aria-hidden="true"></div>
@@ -52,10 +52,10 @@
           </div>
 
           <div class="quick-presets">
-            <button type="button" class="preset-btn" data-from="CNSZX" data-to="NLAMS">深圳 → 阿姆斯特丹</button>
-            <button type="button" class="preset-btn" data-from="CNSZX" data-to="AEDXB">深圳 → 迪拜</button>
-            <button type="button" class="preset-btn" data-from="CNSZX" data-to="SARUH">深圳 → 利雅得</button>
-            <button type="button" class="preset-btn" data-from="CNSZX" data-to="MXMEX">深圳 → 墨西哥城</button>
+            <button type="button" class="preset-btn"><span data-from="CNSZX">深圳</span> → <span data-to="NLAMS">阿姆斯特丹</span></button>
+            <button type="button" class="preset-btn"><span data-from="CNSZX">深圳</span> → <span data-to="AEDXB">迪拜</span></button>
+            <button type="button" class="preset-btn"><span data-from="CNSZX">深圳</span> → <span data-to="SARUH">利雅得</span></button>
+            <button type="button" class="preset-btn"><span data-from="CNSZX">深圳</span> → <span data-to="MXMEX">墨西哥城</span></button>
           </div>
         </section>
 
@@ -96,6 +96,8 @@
                 <span class="legend-item"><i class="swatch swatch-air"></i>空运</span>
                 <span class="legend-item"><i class="swatch swatch-rail"></i>铁路</span>
                 <span class="legend-item"><i class="swatch swatch-road"></i>公路</span>
+                <span class="legend-item compare-only"><i class="swatch swatch-baseline"></i>受阻基线</span>
+                <span class="legend-item compare-only"><i class="node-dot node-blocked"></i>受阻咽喉</span>
               </div>
               <span id="cache-badge" class="cache-badge">—</span>
             </div>
@@ -144,6 +146,7 @@
           </div>
           <article id="map-route-card" class="map-route-card route-view hidden" aria-label="选中路线详情">
             <div class="card-head">
+              <span id="card-role" class="role-badge hidden"></span>
               <span id="card-mode" class="mode-tag"></span>
               <span id="card-likelihood" class="likelihood"></span>
               <button id="close-route-card" type="button" class="map-btn" aria-label="关闭路线详情">×</button>
@@ -155,6 +158,7 @@
               <div class="metric"><span>预计时效</span><strong id="card-time"></strong></div>
               <div class="metric"><span>成本指数</span><strong id="card-cost"></strong></div>
             </div>
+            <div id="card-compare-bar" class="card-compare-bar hidden"></div>
             <div id="card-chips" class="cp-chips hidden"></div>
             <details id="card-legs">
               <summary>查看全程分段</summary>
@@ -173,7 +177,64 @@
             </div>
           </article>
         </div>
-        <div id="impact-banner" class="impact-banner route-view hidden"></div>
+        <output id="route-node-info" class="route-node-info route-view" aria-label="路线节点">悬停或点击地图上的节点查看名称</output>
+        <section id="compare-panel" class="compare-panel route-view hidden" aria-label="基线与绕行对比汇总">
+          <div class="compare-header">
+            <div class="compare-title-group">
+              <strong class="compare-title">基线 vs 绕行对比</strong>
+              <div id="compare-avoid-chips" class="compare-avoid-chips"></div>
+              <span id="compare-headline" class="compare-headline"></span>
+            </div>
+            <div class="compare-controls">
+              <div class="segmented" role="group" aria-label="对比视图">
+                <button type="button" class="seg-btn active" data-compare-tab="summary" aria-pressed="true">方式汇总</button>
+                <button type="button" class="seg-btn" data-compare-tab="routes" aria-pressed="false">路径明细</button>
+              </div>
+              <div class="segmented" role="group" aria-label="地图图层">
+                <button type="button" class="seg-btn active" data-compare-layer="both" aria-pressed="true">基线+绕行</button>
+                <button type="button" class="seg-btn" data-compare-layer="detour" aria-pressed="false">仅绕行</button>
+                <button type="button" class="seg-btn" data-compare-layer="baseline" aria-pressed="false">仅基线</button>
+              </div>
+              <button id="compare-collapse-btn" type="button" class="map-btn map-btn-wide" aria-expanded="true">收起</button>
+            </div>
+          </div>
+          <div id="compare-notice" class="compare-notice hidden"></div>
+          <div id="compare-body" class="compare-body">
+            <div id="compare-summary-wrap" class="compare-table-wrap">
+              <table class="compare-table" aria-label="按运输方式对比汇总">
+                <thead>
+                  <tr>
+                    <th>方式</th>
+                    <th>状态</th>
+                    <th>基线最优</th>
+                    <th>绕行后最优</th>
+                    <th class="num">时效变化</th>
+                    <th class="num">里程变化</th>
+                    <th class="num">成本变化</th>
+                    <th class="actions-col">查看</th>
+                  </tr>
+                </thead>
+                <tbody id="compare-summary-body"></tbody>
+              </table>
+            </div>
+            <div id="compare-routes-wrap" class="compare-table-wrap hidden">
+              <table class="compare-table compare-routes-table" aria-label="全部对比路径明细">
+                <thead>
+                  <tr>
+                    <th>角色</th>
+                    <th>方式</th>
+                    <th>口岸与经由咽喉</th>
+                    <th class="num">里程</th>
+                    <th class="num">时效</th>
+                    <th class="num">成本</th>
+                    <th class="num">较基线变化</th>
+                  </tr>
+                </thead>
+                <tbody id="compare-routes-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
     </section>
   </main>

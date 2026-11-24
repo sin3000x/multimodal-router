@@ -51,6 +51,19 @@ npm start
 npm test
 ```
 
+## 后台服务与内网更新
+
+通过 [scripts/service.sh](scripts/service.sh) 管理后台服务（默认监听 `0.0.0.0:4180`）：
+
+```bash
+npm run service:start    # 启动后台服务
+npm run service:stop     # 停止后台服务
+npm run service:restart  # 普通重启（保留已有 SQLite 缓存，适合前端或非算法调整）
+npm run service:rebuild  # 停服 -> 清空 SQLite 缓存 -> 重新 precompute -> 启动（适合路由/成本算法更新）
+npm run service:status   # 查看进程与 /health 状态
+npm run service:logs     # 查看最近日志
+```
+
 ## HTTP API
 
 - `GET /health` — 服务健康状态、图谱版本、构建统计与缓存命中率

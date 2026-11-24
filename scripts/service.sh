@@ -8,7 +8,9 @@ VAR_DIR="$ROOT_DIR/var"
 PID_FILE="$VAR_DIR/multimodal-router.pid"
 ENV_FILE="$VAR_DIR/multimodal-router.env"
 LOG_FILE="$VAR_DIR/multimodal-router.log"
+CACHE_DB="$VAR_DIR/route-cache.sqlite"
 ENTRY_FILE="$ROOT_DIR/src/server.mjs"
+PRECOMPUTE_FILE="$ROOT_DIR/scripts/precompute.mjs"
 
 DEFAULT_HOST="${HOST:-0.0.0.0}"
 DEFAULT_PORT="${PORT:-4180}"
@@ -205,6 +207,29 @@ cmd_restart() {
   cmd_start
 }
 
+cmd_rebuild() {
+  require_node
+  parse_common_args "$@"
+  load_saved_env
+  local next_host="${ARG_HOST:-${SAVED_HOST:-$DEFAULT_HOST}}"
+  local next_port="${ARG_PORT:-${SAVED_PORT:-$DEFAULT_PORT}}"
+
+  cmd_stop
+
+  echo "Clearing SQLite route cache ($CACHE_DB*) ..."
+  rm -f "$CACHE_DB" "${CACHE_DB}-wal" "${CACHE_DB}-shm"
+
+  echo "Running precompute ($PRECOMPUTE_FILE) ..."
+  (
+    cd "$ROOT_DIR"
+    "$NODE_BIN" "$PRECOMPUTE_FILE"
+  )
+
+  ARG_HOST="$next_host"
+  ARG_PORT="$next_port"
+  cmd_start
+}
+
 cmd_status() {
   parse_common_args "$@"
   local pid
@@ -238,16 +263,17 @@ cmd_logs() {
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <start|stop|restart|status|logs> [options]
+Usage: $(basename "$0") <start|stop|restart|rebuild|status|logs> [options]
 
 Commands:
   start           Start service in background (nohup + PID file)
   stop            Stop running service gracefully
   restart         Restart service (preserves previous host/port unless overridden)
+  rebuild         Stop service, clear SQLite cache, re-run precompute, and start
   status          Show process and /health status
   logs [N|-f]     Show last N log lines (default 50) or follow with -f
 
-Options (for start / restart / status):
+Options (for start / restart / rebuild / status):
   -H, --host <ip>     Bind address (default: 0.0.0.0)
   -p, --port <port>   Listen port (default: 4180)
 
@@ -265,6 +291,7 @@ main() {
     start)   cmd_start "$@" ;;
     stop)    cmd_stop "$@" ;;
     restart) cmd_restart "$@" ;;
+    rebuild) cmd_rebuild "$@" ;;
     status)  cmd_status "$@" ;;
     logs)    cmd_logs "$@" ;;
     -h|--help|"") usage; [[ -n "$cmd" ]] && exit 0 || exit 1 ;;

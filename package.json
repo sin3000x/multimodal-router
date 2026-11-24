@@ -14,6 +14,7 @@
     "service:start": "bash scripts/service.sh start",
     "service:stop": "bash scripts/service.sh stop",
     "service:restart": "bash scripts/service.sh restart",
+    "service:rebuild": "bash scripts/service.sh rebuild",
     "service:status": "bash scripts/service.sh status",
     "service:logs": "bash scripts/service.sh logs",
     "test": "node --test test/*.test.mjs"

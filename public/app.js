@@ -1,5 +1,13 @@
 import { createEndpointPicker } from './endpoint-picker.js';
-import { GRAPH_MAX_ZOOM, GRAPH_ZOOM_INPUT } from './map-config.js';
+import {
+  buildCompareModel,
+  COMPARE_ROLE_META,
+  formatKm,
+  formatDeltaDays,
+  formatDeltaKm,
+  formatCostMultiplier,
+} from './compare-model.js';
+import { GRAPH_MAX_ZOOM, GRAPH_ZOOM_INPUT, ROUTE_MAX_ZOOM } from './map-config.js';
 
 const KEY_AVOID_IDS = new Set([
   'CP_SUEZ',
@@ -48,6 +56,11 @@ let activeRouteId = null;
 let activeLeg = null;
 let cardAnchor = null;
 let cardOpen = false;
+let chokepointNameById = new Map();
+let compareModel = null;
+let compareTab = 'summary';
+let compareLayer = 'both';
+let compareCollapsed = false;
 
 // Web Mercator coordinate helpers (mx in [0, 1), my in [0, 1])
 function clampLat(lat) {
@@ -125,6 +138,8 @@ function getCssTokens() {
     labelBg: get('--map-label-bg', 'rgba(255, 255, 255, 0.92)'),
     labelText: get('--map-label-text', '#0f172a'),
     labelBorder: get('--map-label-border', '#94a3b8'),
+    baseline: get('--compare-baseline', '#dc2626'),
+    danger: get('--danger', '#dc2626'),
     modes: {
       sea: get('--sea', '#0284c7'),
       air: get('--air', '#7c3aed'),
@@ -185,7 +200,7 @@ function wrapUnit(u) {
 }
 
 function clampZoom(zoom, aspect) {
-  const maxZoom = view === graphView ? GRAPH_MAX_ZOOM : 12;
+  const maxZoom = view === graphView ? GRAPH_MAX_ZOOM : ROUTE_MAX_ZOOM;
   return Math.max(Math.min(0.8, 0.76 * aspect), Math.min(maxZoom, zoom));
 }
 
@@ -309,13 +324,40 @@ function boxesOverlap(a, b, pad = 4) {
   );
 }
 
-function drawWaypointMarker(ctx, wp, x, y, modeColor, isHovered) {
+function drawWaypointMarker(ctx, wp, x, y, modeColor, isHovered, isBlocked = false) {
   ctx.save();
   if (isHovered) {
-    ctx.fillStyle = 'rgba(2, 132, 199, 0.22)';
+    ctx.fillStyle = isBlocked ? 'rgba(220, 38, 38, 0.22)' : 'rgba(2, 132, 199, 0.22)';
     ctx.beginPath();
     ctx.arc(x, y, 12, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  if (isBlocked) {
+    const r = isHovered ? 7.5 : 6;
+    ctx.fillStyle = '#dc2626';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x + r, y);
+    ctx.lineTo(x, y + r);
+    ctx.lineTo(x - r, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    const c = 2.6;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(x - c, y - c);
+    ctx.lineTo(x + c, y + c);
+    ctx.moveTo(x + c, y - c);
+    ctx.lineTo(x - c, y + c);
+    ctx.stroke();
+    ctx.restore();
+    return;
   }
 
   if (wp.role === 'origin' || wp.role === 'destination') {
@@ -643,18 +685,33 @@ function drawWorldMap(routes, highlightedId) {
   }
 
   // Draw hovered routes last and use the same projected paths for hit testing.
-  const priority = (route) => hoveredLeg?.route === route ? 2 : Number(route.routeId === highlightedId);
+  const activeRoute = routes.find((r) => r.routeId === highlightedId) ?? routes[0];
+  const pairedId = activeRoute?.pairedRouteId ?? null;
+  const priority = (route) => {
+    if (hoveredLeg?.route === route) return 3;
+    if (route.routeId === highlightedId) return 2;
+    if (pairedId && route.routeId === pairedId) return 1;
+    return 0;
+  };
   const ordered = [...routes].sort((a, b) => priority(a) - priority(b));
   renderedLegs = [];
 
   for (const route of ordered) {
     const isSelected = highlightedId === route.routeId;
     const isHovered = hoveredLeg?.route === route;
-    const color = tokens.modes[route.mode] || tokens.modes.sea;
+    const isPaired = Boolean(pairedId && route.routeId === pairedId);
+    const isBaselineAffected = route.compareRole === 'baseline-affected';
+    const color = isBaselineAffected ? tokens.baseline : (tokens.modes[route.mode] || tokens.modes.sea);
     ctx.save();
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    const dash = route.mode === 'air' ? [6, 4] : route.mode === 'rail' ? [3, 3.5] : [];
+    const dash = isBaselineAffected
+      ? [8, 5]
+      : route.mode === 'air'
+        ? [6, 4]
+        : route.mode === 'rail'
+          ? [3, 3.5]
+          : [];
 
     for (const leg of route.legs || []) {
       const unwrapped = unwrapMxs(leg.geometry || []);
@@ -678,17 +735,32 @@ function drawWorldMap(routes, highlightedId) {
         }
         ctx.setLineDash(dash);
         ctx.strokeStyle = color;
-        ctx.globalAlpha = isSelected || isHovered ? 0.98 : highlightedId ? 0.46 : 0.8;
-        ctx.lineWidth = isFocusedLeg ? 5 : isSelected || isHovered ? 3 : 2;
+        ctx.globalAlpha = isSelected || isHovered
+          ? 0.98
+          : isPaired
+            ? 0.84
+            : highlightedId
+              ? (compareModel ? 0.3 : 0.46)
+              : 0.78;
+        ctx.lineWidth = isFocusedLeg ? 5 : isSelected || isHovered ? 3.4 : isPaired ? 2.6 : 2;
         ctx.stroke();
       }
     }
     ctx.restore();
   }
 
-  // Waypoint markers & labels for selected route (fallback to origin/destination)
-  const activeRoute = routes.find((r) => r.routeId === highlightedId) ?? routes[0];
-  let waypoints = activeRoute?.waypoints ?? [];
+  // Waypoint markers for selected route (fallback to origin/destination)
+  let waypoints = [...(activeRoute?.waypoints ?? [])];
+  if (compareModel && pairedId) {
+    const pairedRoute = routes.find((r) => r.routeId === pairedId);
+    const seenIds = new Set(waypoints.map((w) => w.id));
+    for (const wp of pairedRoute?.waypoints ?? []) {
+      if (compareModel.avoidSet.has(wp.id) && !seenIds.has(wp.id)) {
+        waypoints.push(wp);
+        seenIds.add(wp.id);
+      }
+    }
+  }
   if (!waypoints.length && currentEndpoints.origin && currentEndpoints.destination) {
     waypoints = [
       { ...currentEndpoints.origin, role: 'origin' },
@@ -696,15 +768,17 @@ function drawWorldMap(routes, highlightedId) {
     ];
   }
 
-  const activeColor = tokens.modes[activeRoute?.mode] || tokens.modes.sea;
+  const activeColor = activeRoute?.compareRole === 'baseline-affected'
+    ? tokens.baseline
+    : (tokens.modes[activeRoute?.mode] || tokens.modes.sea);
   renderedMarkers = [];
   for (const wp of waypoints) {
     const mxCopy = nearestCopyMx(lonToMx(wp.lon));
     const [x, y] = projectRaw(mxCopy, latToMy(wp.lat), cssW, cssH);
+    const isBlocked = Boolean(compareModel?.avoidSet.has(wp.id));
     renderedMarkers.push({ wp, x, y });
-    drawWaypointMarker(ctx, wp, x, y, activeColor, wp.id === hoveredWaypointId);
+    drawWaypointMarker(ctx, wp, x, y, activeColor, wp.id === hoveredWaypointId, isBlocked);
   }
-  drawWaypointLabels(ctx, renderedMarkers, tokens, cssW, cssH);
   positionRouteCard(cssW, cssH, activeColor);
 }
 
@@ -867,10 +941,18 @@ function legSummary(leg) {
   return `${MODE_LABELS[leg.mode] || leg.mode} · ${leg.fromName} → ${leg.toName} · ${leg.distanceKm} km`;
 }
 
+function setRouteNodeInfo(text = '') {
+  const info = document.getElementById('route-node-info');
+  info.classList.toggle('has-node', Boolean(text));
+  info.textContent = text || '悬停或点击地图上的节点查看名称';
+  info.title = text;
+}
+
 function clearMapHover() {
   const changed = Boolean(hoveredWaypointId || hoveredLeg);
   hoveredWaypointId = null;
   hoveredLeg = null;
+  setRouteNodeInfo();
   document.getElementById('map-tooltip').classList.add('hidden');
   document.getElementById('world-map').classList.remove('map-target');
   return changed;
@@ -900,15 +982,26 @@ function initMapInteractions() {
     if (changed) drawWorldMap(currentRoutes, activeRouteId);
 
     canvas.classList.toggle('map-target', Boolean(target));
-    tooltip.classList.toggle('hidden', !target);
+    const isRouteNode = Boolean(waypoint && view !== graphView);
+    tooltip.classList.toggle('hidden', !target || isRouteNode);
+    if (changed && view !== graphView && !isRouteNode) setRouteNodeInfo();
     if (!target) return;
 
     if (waypoint) {
       const role = waypoint.groups?.map((group) => NODE_GROUPS[group].label).join(' / ')
         || ROLE_LABELS[waypoint.role] || waypoint.type;
-      tooltip.textContent = `${nodeLabel(waypoint)} · ${role}`;
+      const blockedSuffix = compareModel?.avoidSet.has(waypoint.id) ? ' · 已受阻' : '';
+      const text = `${nodeLabel(waypoint)} · ${role}${blockedSuffix}`;
+      if (isRouteNode) {
+        if (changed) setRouteNodeInfo(text);
+        return;
+      }
+      tooltip.textContent = text;
     } else {
-      tooltip.textContent = target.count ? `${target.count} 个节点 · 点击放大` : legSummary(target.leg);
+      const prefix = target.route?.compareRole
+        ? `[${COMPARE_ROLE_META[target.route.compareRole].label}] `
+        : '';
+      tooltip.textContent = target.count ? `${target.count} 个节点 · 点击放大` : `${prefix}${legSummary(target.leg)}`;
     }
     const { offsetWidth, offsetHeight } = tooltip;
     tooltip.style.left = `${Math.max(8, Math.min(canvas.clientWidth - offsetWidth - 8, x + 12))}px`;
@@ -1314,6 +1407,15 @@ function selectedAvoid() {
   return [...document.querySelectorAll('input[name="avoid"]:checked')].map((el) => el.value);
 }
 
+function focusCompareRoute(routeId) {
+  if (!routeId) return;
+  if (currentRoutes.some((r) => r.routeId === routeId)) {
+    selectRoute(routeId);
+  } else if (compareModel) {
+    applyCompareLayer('both', routeId);
+  }
+}
+
 function selectRoute(routeId, leg = null, anchor = null) {
   activeRouteId = routeId;
   activeLeg = leg;
@@ -1328,10 +1430,21 @@ function selectRoute(routeId, leg = null, anchor = null) {
     renderRouteCard(route, leg);
   }
   drawWorldMap(currentRoutes, activeRouteId);
+  syncCompareSelection();
 }
 
 function renderRouteCard(route, leg) {
   const byId = (id) => document.getElementById(id);
+  const roleBadge = byId('card-role');
+  if (compareModel && route.compareRole && COMPARE_ROLE_META[route.compareRole]) {
+    const meta = COMPARE_ROLE_META[route.compareRole];
+    roleBadge.textContent = meta.label;
+    roleBadge.className = `role-badge tone-${meta.tone}`;
+  } else {
+    roleBadge.textContent = '';
+    roleBadge.className = 'role-badge hidden';
+  }
+
   const via = route.viaHub ? ` → ${route.viaHub.code || route.viaHub.name}` : '';
   const likelihood = route.likelihood === 'primary' ? '主要方案' : '备选方案';
   byId('card-mode').textContent = route.modeLabel;
@@ -1343,17 +1456,54 @@ function renderRouteCard(route, leg) {
   byId('card-time').textContent = `${route.metrics.transitDays} 天`;
   byId('card-cost').textContent = route.metrics.costIndex;
 
+  const compareBar = byId('card-compare-bar');
+  compareBar.replaceChildren();
+  if (compareModel && route.compareRole === 'detour' && route.baselineRef) {
+    const info = document.createElement('span');
+    info.textContent = `较${route.modeLabel}基线 (${route.baselineRef.metrics.transitDays} 天)：${formatDeltaDays(route.deltaDays)} · ${formatDeltaKm(route.deltaKm)} · ${formatCostMultiplier(route.costMultiplier)} 成本`;
+    compareBar.appendChild(info);
+    if (route.pairedRouteId) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cmp-switch-btn';
+      btn.textContent = '切换基线';
+      btn.onclick = () => focusCompareRoute(route.pairedRouteId);
+      compareBar.appendChild(btn);
+    }
+    compareBar.classList.remove('hidden');
+  } else if (compareModel && route.compareRole === 'baseline-affected') {
+    const info = document.createElement('span');
+    info.textContent = route.pairedRouteId ? '经过受阻咽喉' : '经过受阻咽喉 · 该方式绕行后无可用方案';
+    compareBar.appendChild(info);
+    if (route.pairedRouteId) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'cmp-switch-btn';
+      btn.textContent = '切换绕行';
+      btn.onclick = () => focusCompareRoute(route.pairedRouteId);
+      compareBar.appendChild(btn);
+    }
+    compareBar.classList.remove('hidden');
+  } else if (compareModel && route.compareRole === 'land-sub') {
+    const info = document.createElement('span');
+    info.textContent = '海运受阻时的陆路替代方案';
+    compareBar.appendChild(info);
+    compareBar.classList.remove('hidden');
+  } else {
+    compareBar.classList.add('hidden');
+  }
+
   const chips = route.chokepoints.map((cp) => {
     const chip = document.createElement('span');
-    chip.className = 'chip';
-    chip.textContent = cp.name_zh;
+    const isBlocked = Boolean(compareModel?.avoidSet.has(cp.id) && route.compareGroup === 'baseline');
+    chip.className = isBlocked ? 'chip blocked' : 'chip';
+    chip.textContent = isBlocked ? `${cp.name_zh}（受阻）` : cp.name_zh;
     return chip;
   });
-  if (route.deltaDays != null) {
+  if ((!compareModel && route.deltaDays != null) || (compareModel && route.showDelta && route.deltaDays != null)) {
     const delta = document.createElement('span');
     delta.className = 'chip delta';
-    const sign = route.deltaDays >= 0 ? '+' : '';
-    delta.textContent = `${sign}${route.deltaDays} 天 · ${route.costMultiplier}x 成本`;
+    delta.textContent = `${formatDeltaDays(route.deltaDays)} · ${formatCostMultiplier(route.costMultiplier)} 成本`;
     chips.push(delta);
   }
   byId('card-chips').replaceChildren(...chips);
@@ -1370,33 +1520,325 @@ function renderRouteCard(route, leg) {
   byId('map-route-card').scrollTop = 0;
 }
 
-function renderRoutes(routes, { compareData = null } = {}) {
-  currentRoutes = routes;
-
-  const banner = document.getElementById('impact-banner');
-  if (compareData?.impactSummary) {
-    const s = compareData.impactSummary;
-    banner.classList.remove('hidden');
-    banner.textContent = `对比结果：基线受影响路径 ${s.affectedBaselineRoutes}/${s.totalBaselineRoutes} 条 · 海运状态：${
-      s.seaCutOff ? '已中断' : s.seaDetoured ? '触发绕行' : '未受阻'
-    }（可用海运 ${s.survivingSeaCount} 条 · 最快替代 ${s.bestAlternativeDays ?? '—'} 天）`;
-  } else {
-    banner.classList.add('hidden');
+function populateRouteSelect(routes) {
+  const select = document.getElementById('route-select');
+  if (!compareModel) {
+    const options = routes.map((route) => {
+      const via = route.viaHub?.code || route.viaHub?.name;
+      const distinguishingStops = via || route.chokepoints.map((cp) => cp.name_zh).join('、');
+      const name = [route.modeLabel, distinguishingStops, `${route.metrics.transitDays} 天`].filter(Boolean).join(' · ');
+      return new Option(name, route.routeId);
+    });
+    select.replaceChildren(...options);
+    document.getElementById('route-picker').classList.toggle('hidden', !options.length);
+    return;
   }
 
-  const options = routes.map((route) => {
-    const via = route.viaHub?.code || route.viaHub?.name;
-    const distinguishingStops = via || route.chokepoints.map((cp) => cp.name_zh).join('、');
-    const name = [route.modeLabel, distinguishingStops, `${route.metrics.transitDays} 天`].filter(Boolean).join(' · ');
-    return new Option(name, route.routeId);
+  const groups = [
+    { label: '绕行 / 替代方案', roles: new Set(['detour', 'land-sub']) },
+    { label: '受阻原基线', roles: new Set(['baseline-affected']) },
+    { label: '未受阻方案', roles: new Set(['unchanged', 'baseline']) },
+  ];
+  const nodes = [];
+  for (const group of groups) {
+    const matched = routes.filter((r) => group.roles.has(r.compareRole));
+    if (!matched.length) continue;
+    const optgroup = document.createElement('optgroup');
+    optgroup.label = group.label;
+    for (const route of matched) {
+      const roleShort = COMPARE_ROLE_META[route.compareRole]?.shortLabel;
+      const via = route.viaHub?.code || route.viaHub?.name;
+      const stops = via || route.chokepoints.map((cp) => cp.name_zh).join('、');
+      const deltaHint = route.showDelta && route.deltaDays != null ? ` (${formatDeltaDays(route.deltaDays)})` : '';
+      const label = [
+        roleShort ? `[${roleShort}]` : '',
+        route.modeLabel,
+        stops,
+        `${route.metrics.transitDays} 天${deltaHint}`,
+      ].filter(Boolean).join(' · ');
+      optgroup.appendChild(new Option(label, route.routeId));
+    }
+    nodes.push(optgroup);
+  }
+  select.replaceChildren(...nodes);
+  document.getElementById('route-picker').classList.toggle('hidden', !routes.length);
+}
+
+function buildRouteBriefCell(route) {
+  const wrap = document.createElement('div');
+  const main = document.createElement('div');
+  main.className = 'route-cell-main';
+  main.textContent = `${route.metrics.transitDays} 天 · ${formatKm(route.metrics.distanceKm)}`;
+
+  const sub = document.createElement('div');
+  sub.className = 'route-cell-sub';
+  const via = route.viaHub ? ` → ${route.viaHub.code || route.viaHub.name}` : '';
+  const cps = route.chokepoints.map((cp) => cp.name_zh).join('、');
+  const gw = `${route.originGateway.name}${via} → ${route.destGateway.name}`;
+  sub.textContent = cps ? `${gw} · 经 ${cps}` : gw;
+  sub.title = sub.textContent;
+
+  wrap.append(main, sub);
+  return wrap;
+}
+
+function deltaToneClass(val, flatVal = 0) {
+  if (val == null || Math.abs(val - flatVal) < 1e-9) return 'delta-flat';
+  return val > flatVal ? 'delta-worse' : 'delta-better';
+}
+
+function syncCompareSelection() {
+  if (!compareModel) return;
+  const activeRoute = currentRoutes.find((r) => r.routeId === activeRouteId);
+  for (const tr of document.querySelectorAll('#compare-routes-body tr')) {
+    tr.classList.toggle('is-selected', tr.dataset.routeId === activeRouteId);
+  }
+  for (const tr of document.querySelectorAll('#compare-summary-body tr')) {
+    tr.classList.toggle('is-selected', Boolean(activeRoute && tr.dataset.mode === activeRoute.mode));
+  }
+  for (const btn of document.querySelectorAll('#compare-summary-body .cmp-act-btn')) {
+    btn.classList.toggle('active', btn.dataset.routeId === activeRouteId);
+  }
+}
+
+function renderComparePanel() {
+  const mapPanel = document.getElementById('map-panel');
+  const panel = document.getElementById('compare-panel');
+  const compareBtn = document.getElementById('compare-btn');
+  const active = Boolean(compareModel);
+
+  mapPanel.dataset.compare = String(active);
+  panel.classList.toggle('hidden', !active);
+  compareBtn.classList.toggle('is-active', active);
+  compareBtn.setAttribute('aria-pressed', String(active));
+  if (!active) return;
+
+  panel.classList.toggle('collapsed', compareCollapsed);
+  const collapseBtn = document.getElementById('compare-collapse-btn');
+  collapseBtn.textContent = compareCollapsed ? '展开' : '收起';
+  collapseBtn.setAttribute('aria-expanded', String(!compareCollapsed));
+
+  const avoidChips = compareModel.avoidNames.map((name) => {
+    const chip = document.createElement('span');
+    chip.className = 'compare-avoid-chip';
+    chip.textContent = `避开 ${name}`;
+    return chip;
   });
-  document.getElementById('route-select').replaceChildren(...options);
-  document.getElementById('route-picker').classList.toggle('hidden', !options.length);
+  document.getElementById('compare-avoid-chips').replaceChildren(...avoidChips);
+
+  const { affectedCount, totalBaselineCount, fastestDisrupted } = compareModel.headline;
+  document.getElementById('compare-headline').textContent =
+    `受影响基线 ${affectedCount}/${totalBaselineCount} 条 · 最快可用 ${
+      fastestDisrupted ? `${fastestDisrupted.metrics.transitDays} 天 (${fastestDisrupted.modeLabel})` : '无'
+    }`;
+
+  const notice = document.getElementById('compare-notice');
+  if (!compareModel.hasAvoid) {
+    notice.textContent = '未勾选受阻咽喉/空域：当前基线与绕行方案相同，请在左侧勾选受阻咽喉（如苏伊士运河、霍尔木兹海峡）后重新对比。';
+    notice.classList.remove('hidden');
+  } else {
+    notice.classList.add('hidden');
+  }
+
+  for (const btn of document.querySelectorAll('[data-compare-tab]')) {
+    const isSel = btn.dataset.compareTab === compareTab;
+    btn.classList.toggle('active', isSel);
+    btn.setAttribute('aria-pressed', String(isSel));
+    if (btn.dataset.compareTab === 'routes') {
+      btn.textContent = `路径明细 (${currentRoutes.length})`;
+    }
+  }
+  for (const btn of document.querySelectorAll('[data-compare-layer]')) {
+    const isSel = btn.dataset.compareLayer === compareLayer;
+    btn.classList.toggle('active', isSel);
+    btn.setAttribute('aria-pressed', String(isSel));
+  }
+
+  document.getElementById('compare-summary-wrap').classList.toggle('hidden', compareTab !== 'summary');
+  document.getElementById('compare-routes-wrap').classList.toggle('hidden', compareTab !== 'routes');
+
+  // Render mode summary table
+  const summaryRows = compareModel.modeSummaries.map((row) => {
+    const tr = document.createElement('tr');
+    tr.dataset.mode = row.mode;
+    tr.onclick = () => focusCompareRoute(row.pairDisruptedId ?? row.pairBaselineId);
+
+    const tdMode = document.createElement('td');
+    const modeWrap = document.createElement('span');
+    modeWrap.className = 'mode-cell';
+    const dot = document.createElement('i');
+    dot.className = 'mode-dot';
+    dot.style.background = `var(--${row.mode === 'local' ? 'road' : row.mode})`;
+    modeWrap.append(dot, document.createTextNode(row.modeLabel));
+    tdMode.appendChild(modeWrap);
+
+    const tdStatus = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = `status-badge tone-${row.statusTone}`;
+    badge.textContent = row.statusLabel;
+    tdStatus.appendChild(badge);
+
+    const tdBase = document.createElement('td');
+    if (row.bestBaseline) {
+      tdBase.appendChild(buildRouteBriefCell(row.bestBaseline));
+    } else {
+      tdBase.textContent = '—';
+    }
+
+    const tdDisp = document.createElement('td');
+    if (row.bestDisrupted) {
+      tdDisp.appendChild(buildRouteBriefCell(row.bestDisrupted));
+    } else {
+      const empty = document.createElement('span');
+      empty.className = 'route-cell-empty';
+      empty.textContent = '无可用方案';
+      tdDisp.appendChild(empty);
+    }
+
+    const tdDeltaDays = document.createElement('td');
+    tdDeltaDays.className = `num ${deltaToneClass(row.deltaDays, 0)}`;
+    tdDeltaDays.textContent = row.bestDisrupted ? formatDeltaDays(row.deltaDays) : '中断';
+    if (!row.bestDisrupted) tdDeltaDays.className = 'num route-cell-empty';
+
+    const tdDeltaKm = document.createElement('td');
+    tdDeltaKm.className = `num ${deltaToneClass(row.deltaKm, 0)}`;
+    tdDeltaKm.textContent = row.bestDisrupted ? formatDeltaKm(row.deltaKm) : '—';
+
+    const tdCost = document.createElement('td');
+    tdCost.className = `num ${deltaToneClass(row.costMultiplier, 1)}`;
+    if (row.bestDisrupted && row.bestBaseline) {
+      const main = document.createElement('div');
+      main.textContent = formatCostMultiplier(row.costMultiplier);
+      const sub = document.createElement('div');
+      sub.className = 'route-cell-sub';
+      sub.textContent = `${row.bestBaseline.metrics.costIndex}→${row.bestDisrupted.metrics.costIndex}`;
+      tdCost.append(main, sub);
+    } else {
+      tdCost.textContent = '—';
+    }
+
+    const tdAct = document.createElement('td');
+    tdAct.className = 'actions-col';
+    const actGroup = document.createElement('div');
+    actGroup.className = 'cmp-act-group';
+
+    const addBtn = (label, targetId, extraClass = '') => {
+      if (!targetId) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `cmp-act-btn${extraClass ? ` ${extraClass}` : ''}`;
+      btn.dataset.routeId = targetId;
+      btn.textContent = label;
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        focusCompareRoute(targetId);
+      };
+      actGroup.appendChild(btn);
+    };
+
+    if (row.status === 'cutoff') {
+      addBtn('受阻基线', row.pairBaselineId, 'baseline-act');
+    } else if (row.status === 'detour') {
+      addBtn('基线', row.pairBaselineId, 'baseline-act');
+      addBtn('绕行', row.pairDisruptedId);
+    } else if (row.status === 'partial') {
+      addBtn('受阻基线', row.pairBaselineId, 'baseline-act');
+      addBtn('最优方案', row.pairDisruptedId);
+    } else {
+      addBtn('查看', row.pairDisruptedId ?? row.pairBaselineId);
+    }
+    tdAct.appendChild(actGroup);
+
+    tr.append(tdMode, tdStatus, tdBase, tdDisp, tdDeltaDays, tdDeltaKm, tdCost, tdAct);
+    return tr;
+  });
+  document.getElementById('compare-summary-body').replaceChildren(...summaryRows);
+
+  // Render route detail table
+  const routeRows = currentRoutes.map((route) => {
+    const tr = document.createElement('tr');
+    tr.dataset.routeId = route.routeId;
+    tr.onclick = () => selectRoute(route.routeId);
+
+    const tdRole = document.createElement('td');
+    const roleMeta = COMPARE_ROLE_META[route.compareRole] ?? { label: '方案', tone: 'neutral' };
+    const rolePill = document.createElement('span');
+    rolePill.className = `role-badge tone-${roleMeta.tone}`;
+    rolePill.textContent = roleMeta.label;
+    tdRole.appendChild(rolePill);
+
+    const tdMode = document.createElement('td');
+    const modeWrap = document.createElement('span');
+    modeWrap.className = 'mode-cell';
+    const dot = document.createElement('i');
+    dot.className = 'mode-dot';
+    dot.style.background = `var(--${route.mode === 'local' ? 'road' : route.mode})`;
+    modeWrap.append(dot, document.createTextNode(route.modeLabel));
+    tdMode.appendChild(modeWrap);
+
+    const tdStops = document.createElement('td');
+    const via = route.viaHub ? ` → ${route.viaHub.code || route.viaHub.name}` : '';
+    const cps = route.chokepoints.map((cp) => cp.name_zh).join('、');
+    const gwMain = document.createElement('div');
+    gwMain.className = 'route-cell-main';
+    gwMain.textContent = `${route.originGateway.name}${via} → ${route.destGateway.name}`;
+    const gwSub = document.createElement('div');
+    gwSub.className = 'route-cell-sub';
+    gwSub.textContent = cps ? `经 ${cps}` : '直达 / 无经停咽喉';
+    tdStops.append(gwMain, gwSub);
+
+    const tdKm = document.createElement('td');
+    tdKm.className = 'num';
+    tdKm.textContent = formatKm(route.metrics.distanceKm);
+
+    const tdDays = document.createElement('td');
+    tdDays.className = 'num';
+    tdDays.textContent = `${route.metrics.transitDays} 天`;
+
+    const tdCost = document.createElement('td');
+    tdCost.className = 'num';
+    tdCost.textContent = route.metrics.costIndex;
+
+    const tdDelta = document.createElement('td');
+    tdDelta.className = 'num';
+    if (route.showDelta && route.deltaDays != null) {
+      tdDelta.classList.add(deltaToneClass(route.deltaDays, 0));
+      tdDelta.textContent = `${formatDeltaDays(route.deltaDays)} / ${formatCostMultiplier(route.costMultiplier)}`;
+    } else if (route.compareRole === 'baseline-affected') {
+      tdDelta.className = 'num route-cell-empty';
+      tdDelta.textContent = '经过受阻咽喉';
+    } else {
+      tdDelta.className = 'num delta-flat';
+      tdDelta.textContent = '无变化';
+    }
+
+    tr.append(tdRole, tdMode, tdStops, tdKm, tdDays, tdCost, tdDelta);
+    return tr;
+  });
+  document.getElementById('compare-routes-body').replaceChildren(...routeRows);
+  syncCompareSelection();
+}
+
+function applyCompareLayer(layer, preferredRouteId = null) {
+  if (!compareModel) return;
+  compareLayer = layer;
+  const routes = compareModel.getRoutes(layer);
+  const nextId =
+    preferredRouteId && routes.some((r) => r.routeId === preferredRouteId)
+      ? preferredRouteId
+      : compareModel.defaultRouteId(layer);
+  renderRoutes(routes, { initialRouteId: nextId });
+}
+
+function renderRoutes(routes, { initialRouteId = null } = {}) {
+  currentRoutes = routes;
+  populateRouteSelect(routes);
+  renderComparePanel();
 
   document.querySelector('.map-stage').classList.remove('route-card-docked');
   if (view === routeView) fitRoutesToView(routes);
   else fitRoutesOnReturn = true;
-  selectRoute(routes[0]?.routeId ?? null);
+  selectRoute(initialRouteId ?? routes[0]?.routeId ?? null);
 }
 
 async function runQuery(isCompare = false) {
@@ -1441,9 +1883,22 @@ async function runQuery(isCompare = false) {
     badge.className = `cache-badge${c.hit ? ' hit' : ''}`;
   }
 
-  const routes = isCompare ? [...(data.alternatives || []), ...(data.landSubstitutions || [])] : data.routes || [];
-  summary.textContent = `${data.origin.name_zh} → ${data.destination.name_zh} · 共 ${routes.length} 条评估路径`;
-  renderRoutes(routes, { compareData: isCompare ? data : null });
+  if (isCompare) {
+    compareModel = buildCompareModel(data, chokepointNameById);
+    compareLayer = 'both';
+    compareTab = 'summary';
+    compareCollapsed = false;
+    const routes = compareModel.getRoutes(compareLayer);
+    summary.textContent = `${data.origin.name_zh} → ${data.destination.name_zh} · 基线 vs 绕行对比${
+      compareModel.hasAvoid ? `（受阻：${compareModel.avoidNames.join('、')}）` : '（未勾选受阻咽喉）'
+    }`;
+    renderRoutes(routes, { initialRouteId: compareModel.defaultRouteId(compareLayer) });
+  } else {
+    compareModel = null;
+    const routes = data.routes || [];
+    summary.textContent = `${data.origin.name_zh} → ${data.destination.name_zh} · 共 ${routes.length} 条评估路径`;
+    renderRoutes(routes);
+  }
   refreshHealth();
 }
 
@@ -1467,6 +1922,7 @@ async function init() {
     .catch((err) => console.warn('Failed to load basemap:', err));
 
   const cpRes = await fetchJson('/v1/chokepoints');
+  chokepointNameById = new Map(cpRes.chokepoints.map((cp) => [cp.id, cp.name_zh]));
 
   const cpList = document.getElementById('chokepoint-list');
   const sortedCps = [...cpRes.chokepoints].sort(
@@ -1484,11 +1940,27 @@ async function init() {
 
   for (const btn of document.querySelectorAll('.preset-btn')) {
     btn.onclick = () => {
-      document.getElementById('from-input').value = btn.dataset.from;
-      document.getElementById('to-input').value = btn.dataset.to;
+      for (const endpoint of ['from', 'to']) {
+        const label = btn.querySelector(`[data-${endpoint}]`);
+        endpointPickers[endpoint].setNode({ id: label.dataset[endpoint], name_zh: label.textContent });
+      }
       runQuery(false);
     };
   }
+
+  for (const btn of document.querySelectorAll('[data-compare-tab]')) {
+    btn.onclick = () => {
+      compareTab = btn.dataset.compareTab;
+      renderComparePanel();
+    };
+  }
+  for (const btn of document.querySelectorAll('[data-compare-layer]')) {
+    btn.onclick = () => applyCompareLayer(btn.dataset.compareLayer);
+  }
+  document.getElementById('compare-collapse-btn').onclick = () => {
+    compareCollapsed = !compareCollapsed;
+    renderComparePanel();
+  };
 
   document.getElementById('run-btn').onclick = () => runQuery(false);
   document.getElementById('compare-btn').onclick = () => runQuery(true);

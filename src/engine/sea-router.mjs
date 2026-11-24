@@ -40,7 +40,9 @@ class MinHeap {
   }
 }
 
-export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
+const ROAD_CIRCUITY = 1.25;
+
+export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGroups = {}) {
   const vertices = graph.marnet.vertices;
   const edges = graph.marnet.edges;
   const adjacency = Array.from({ length: vertices.length }, () => []);
@@ -145,9 +147,19 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
 
   function selectGatewayPorts(node, { maxDistanceKm = 260, limit = 4 } = {}) {
     if (node.type === 'port' && node.marnetVertexId != null) {
-      return [{ port: node, drayageKm: 0, viaCorridor: null, preferred: true }];
+      return [
+        {
+          port: node,
+          drayageKm: 0,
+          viaCorridor: null,
+          preferred: true,
+          isHomePort: true,
+          isRemoteAlternate: false,
+        },
+      ];
     }
 
+    const homePortIds = new Set(portGroups[node.id]?.ports ?? []);
     const candidates = new Map();
 
     // 1. Explicitly modeled inland-to-port corridors (can exceed 260 km, e.g. Riyadh <-> Jeddah/Dammam)
@@ -163,6 +175,8 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
           drayageMode: edge.mode,
           viaCorridor: edge.corridor,
           preferred: true,
+          isHomePort: homePortIds.has(target.id),
+          isRemoteAlternate: false,
         });
       }
     }
@@ -173,13 +187,27 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
       if (candidates.has(port.id)) continue;
       const d = haversineKm(node.lon, node.lat, port.lon, port.lat);
       if (d <= maxDistanceKm) {
-        const isContainerPort = port.isCuratedPort || port.isHub;
+        const isHomePort =
+          homePortIds.has(port.id) ||
+          (port.id === node.id && Boolean(port.isCuratedPort || port.isHub));
+        const isQualified = Boolean(
+          isHomePort || port.isCuratedPort || port.isHub || port.isMajor
+        );
         const score =
           d -
-          (isContainerPort ? 160 : 0) -
+          (isHomePort ? 220 : 0) -
+          (port.isHub ? 150 : 0) -
+          (port.isCuratedPort ? 120 : 0) -
           (port.isMajor ? 80 : 0) -
           (port.type === 'port' ? 20 : 0);
-        nearby.push({ port, drayageKm: +d.toFixed(1), score });
+        nearby.push({
+          port,
+          straightKm: +d.toFixed(1),
+          drayageKm: port.id === node.id ? 0 : +(d * ROAD_CIRCUITY).toFixed(1),
+          isHomePort,
+          isQualified,
+          score,
+        });
       }
     }
     nearby.sort((a, b) => a.score - b.score);
@@ -197,13 +225,19 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
       if (/petroleum|lpg|terminal/i.test(item.port.name_en) && !item.port.curated && out.length > 0) {
         continue;
       }
+      // Skip non-qualified minor bulk/fishing ports when major/curated/hub gateways already exist
+      if (out.some((c) => c.preferred) && !item.isQualified) {
+        continue;
+      }
       seenVertices.add(vId);
       out.push({
         port: item.port,
         drayageKm: item.drayageKm,
         drayageMode: 'road',
         viaCorridor: null,
-        preferred: Boolean(item.port.curated || item.port.isMajor),
+        preferred: item.isQualified,
+        isHomePort: item.isHomePort,
+        isRemoteAlternate: !item.isHomePort && item.straightKm > 60,
       });
     }
 
@@ -219,10 +253,12 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
       for (const item of fallback.slice(0, 2)) {
         out.push({
           port: item.port,
-          drayageKm: item.drayageKm,
+          drayageKm: +(item.drayageKm * ROAD_CIRCUITY).toFixed(1),
           drayageMode: 'road',
           viaCorridor: null,
           preferred: false,
+          isHomePort: false,
+          isRemoteAlternate: true,
         });
       }
     }
@@ -232,6 +268,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
 
   function buildSeaCandidate(originNode, destNode, og, dg, pathResult, { includeGeometry, isPrimary }) {
     const legs = [];
+    const legOptions = [];
     if (og.port.id !== originNode.id) {
       legs.push({
         kind: 'drayage',
@@ -249,6 +286,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
           ],
         }),
       });
+      legOptions.push({ isRemoteAlternate: Boolean(og.isRemoteAlternate) });
     }
 
     legs.push({
@@ -268,6 +306,9 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
         ],
       }),
     });
+    legOptions.push({
+      isSecondaryPort: dg.port.id !== destNode.id && !dg.port.isHub && !dg.isHomePort,
+    });
 
     if (dg.port.id !== destNode.id) {
       legs.push({
@@ -286,6 +327,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
           ],
         }),
       });
+      legOptions.push({ isRemoteAlternate: Boolean(dg.isRemoteAlternate) });
     }
 
     const chokepoints = pathResult.passages.map((cpId) => {
@@ -307,7 +349,10 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
       nodeSequence.push(leg.to);
     }
 
-    const metrics = scoreRoute('sea', legs, { chokepointCount: chokepoints.length });
+    const metrics = scoreRoute('sea', legs, {
+      chokepointCount: chokepoints.length,
+      legOptions,
+    });
     const sigPassages = [...pathResult.passages].sort().join(',');
     const signature = `sea:${og.port.id}:${dg.port.id}:${sigPassages}`;
 
@@ -415,6 +460,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map()) {
     candidates.sort(
       (a, b) =>
         a.candidate.metrics.transitDays - b.candidate.metrics.transitDays ||
+        a.candidate.metrics.costIndex - b.candidate.metrics.costIndex ||
         a.candidate.metrics.distanceKm - b.candidate.metrics.distanceKm
     );
 

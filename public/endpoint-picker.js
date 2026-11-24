@@ -4,7 +4,9 @@ export function createEndpointPicker(input, { fetchJson, describe, submit }) {
   const list = field.querySelector('[role="listbox"]');
   const message = field.querySelector('.endpoint-message');
   const status = field.querySelector('.endpoint-status');
-  let selected = null;
+  let selected = input.dataset.nodeId
+    ? { id: input.dataset.nodeId, label: input.defaultValue }
+    : null;
   let active = -1;
   let composing = false;
   let timer;
