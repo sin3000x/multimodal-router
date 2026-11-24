@@ -19,6 +19,14 @@ const ROLE_LABELS = {
 };
 
 const MODE_LABELS = { sea: '海运', air: '空运', rail: '铁路', road: '公路', local: '本地接驳' };
+const NODE_GROUPS = {
+  port: { label: '港口', color: 'sea' },
+  airport: { label: '机场', color: 'air' },
+  city: { label: '城市', color: 'city' },
+  land: { label: '陆铁枢纽与口岸', color: 'rail' },
+  passage: { label: '咽喉与空域', color: 'road' },
+};
+const NODE_SHORT_NAMES = { HKG: '香港机场', PVG: '上海浦东机场' };
 const THEME_KEY = 'mmr-theme';
 
 let worldGeo = null;
@@ -49,11 +57,33 @@ function latToMy(lat) {
 const DEFAULT_CENTER_MY = latToMy(20);
 
 // Interactive map viewport state (isotropic Web Mercator)
-const view = { zoom: 1, centerMx: 0.5, centerMy: DEFAULT_CENTER_MY };
+const routeView = { zoom: 1, centerMx: 0.5, centerMy: DEFAULT_CENTER_MY };
+const graphView = { ...routeView };
+let view = routeView;
+let fitRoutesOnReturn = false;
+let graphNodes = null;
+let graphLinks = null;
+let nodesRequest = null;
+let linksRequest = null;
+let selectedGraphNode = null;
 let renderedMarkers = [];
 let renderedLegs = [];
 let hoveredWaypointId = null;
 let hoveredLeg = null;
+
+function nodeLabel(node) {
+  const code = node.code || node.id;
+  const name = NODE_SHORT_NAMES[code] || node.name_zh || node.name_en || node.name || code;
+  return code && name !== code && !code.startsWith('COORD_') ? `${name}（${code}）` : name;
+}
+
+function nodeGroups(node) {
+  if (['chokepoint', 'airspace', 'sea_area'].includes(node.type)) return ['passage'];
+  if (['airport', 'hub_airport'].includes(node.type)) return ['airport'];
+  const groups = ['city', 'port'].filter((type) => node.type === type || node.functions?.includes(type));
+  if (!['city', 'port'].includes(node.type)) groups.push('land');
+  return groups;
+}
 
 async function fetchJson(url, options) {
   const res = await fetch(url, options);
@@ -79,6 +109,7 @@ function getCssTokens() {
       rail: get('--rail', '#059669'),
       road: get('--road', '#d97706'),
       local: get('--road', '#d97706'),
+      city: get('--map-label-text', '#0f172a'),
     },
   };
 }
@@ -312,11 +343,7 @@ function drawWaypointLabels(ctx, items, tokens, cssW, cssH) {
     const { wp, x, y } = item;
     if (x < -10 || x > cssW + 10 || y < -10 || y > cssH + 10) continue;
 
-    const showCode =
-      wp.role === 'origin' ||
-      wp.role === 'destination' ||
-      (wp.role === 'gateway' && view.zoom >= 1.8);
-    const label = showCode && wp.id !== wp.name_zh ? `${wp.name_zh} (${wp.id})` : wp.name_zh;
+    const label = nodeLabel(wp);
     const textW = ctx.measureText(label).width;
     const padX = 6;
     const boxW = textW + padX * 2;
@@ -362,6 +389,96 @@ function drawWaypointLabels(ctx, items, tokens, cssW, cssH) {
     ctx.fillText(label, chosen.x + padX, chosen.y + chosen.h / 2 + 0.5);
   }
   ctx.restore();
+}
+
+function drawGraphLinks(ctx, tokens, width, height) {
+  if (!graphLinks) return;
+  for (const [layer, paths] of Object.entries(graphLinks)) {
+    if (!document.getElementById(`${layer}-layer`).checked) continue;
+    ctx.save();
+    ctx.globalAlpha = layer === 'sea' ? 0.42 : 0.78;
+    ctx.lineWidth = layer === 'sea' ? 1 : 1.7;
+    for (const [mode, segments] of paths) {
+      ctx.strokeStyle = tokens.modes[mode] || tokens.modes.rail;
+      ctx.beginPath();
+      for (const { points, minMx, maxMx, minMy, maxMy } of segments) {
+        const [, top] = projectRaw(0, minMy, width, height);
+        const [, bottom] = projectRaw(0, maxMy, width, height);
+        if (top > height || bottom < 0) continue;
+        for (const offset of visibleWorldOffsets(minMx, maxMx)) {
+          points.forEach(([mx, my], index) => {
+            const [x, y] = projectRaw(mx + offset, my, width, height);
+            if (index === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          });
+        }
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function drawNodeGraph(ctx, tokens, width, height) {
+  renderedMarkers = [];
+  renderedLegs = [];
+  if (!graphNodes) return;
+  drawGraphLinks(ctx, tokens, width, height);
+  const filter = document.getElementById('graph-type').value;
+  const cells = new Map();
+  const markers = [];
+  for (const node of graphNodes) {
+    const selected = node === selectedGraphNode;
+    if (!selected && ((filter && !node.groups.includes(filter)) || (view.zoom < 2 && !node.featured))) continue;
+    const [x, y] = projectRaw(nearestCopyMx(node.mx), node.my, width, height);
+    if (x < 0 || x > width || y < 0 || y > height) continue;
+    const marker = { wp: node, x, y };
+    if (selected || view.zoom >= 8) {
+      markers.push(marker);
+      continue;
+    }
+    const key = `${Math.floor(x / 32)},${Math.floor(y / 32)}`;
+    const cell = cells.get(key) || [];
+    cell.push(marker);
+    cells.set(key, cell);
+  }
+
+  for (const cell of cells.values()) {
+    if (cell.length === 1) {
+      markers.push(cell[0]);
+      continue;
+    }
+    const x = cell.reduce((sum, marker) => sum + marker.x, 0) / cell.length;
+    const y = cell.reduce((sum, marker) => sum + marker.y, 0) / cell.length;
+    markers.push({ count: cell.length, x, y });
+  }
+
+  markers.sort((a, b) => Number(a.wp === selectedGraphNode) - Number(b.wp === selectedGraphNode));
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '600 10px -apple-system, BlinkMacSystemFont, sans-serif';
+  for (const marker of markers) {
+    const { wp, x, y, count } = marker;
+    const emphasis = wp && (wp === selectedGraphNode || wp.id === hoveredWaypointId);
+    const radius = count ? Math.min(15, 9 + Math.log2(count)) : emphasis ? 7 : 4;
+    const group = wp && (filter && wp.groups.includes(filter) ? filter : wp.groups[0]);
+    ctx.fillStyle = group ? tokens.modes[NODE_GROUPS[group].color] : tokens.labelBg;
+    ctx.strokeStyle = count ? tokens.labelBorder : tokens.land;
+    ctx.lineWidth = emphasis ? 2 : 1;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (count) {
+      ctx.fillStyle = tokens.labelText;
+      ctx.fillText(count, x, y + 0.5);
+    }
+    renderedMarkers.push({ ...marker, radius });
+  }
+  ctx.restore();
+  drawWaypointLabels(ctx, renderedMarkers.filter(({ wp }) =>
+    wp && (wp === selectedGraphNode || wp.id === hoveredWaypointId)), tokens, width, height);
 }
 
 function drawWorldMap(routes, highlightedId) {
@@ -429,6 +546,11 @@ function drawWorldMap(routes, highlightedId) {
     }
   }
 
+  if (view === graphView) {
+    drawNodeGraph(ctx, tokens, cssW, cssH);
+    return;
+  }
+
   // Draw hovered routes last and use the same projected paths for hit testing.
   const priority = (route) => hoveredLeg?.route === route ? 2 : Number(route.routeId === highlightedId);
   const ordered = [...routes].sort((a, b) => priority(a) - priority(b));
@@ -492,7 +614,7 @@ function drawWorldMap(routes, highlightedId) {
     drawWaypointMarker(ctx, wp, x, y, activeColor, wp.id === hoveredWaypointId);
   }
   drawWaypointLabels(ctx, renderedMarkers, tokens, cssW, cssH);
-  positionRouteCard(ctx, cssW, cssH, activeColor);
+  positionRouteCard(cssW, cssH, activeColor);
 }
 
 function closestPointOnSegment(x, y, [ax, ay], [bx, by]) {
@@ -572,7 +694,7 @@ function cardIntersectsRoutes(x, y, width, height) {
   return false;
 }
 
-function positionRouteCard(ctx, width, height, color) {
+function positionRouteCard(width, height, color) {
   const card = document.getElementById('map-route-card');
   const stage = card.parentElement;
   const docked = stage.classList.contains('route-card-docked');
@@ -615,32 +737,17 @@ function positionRouteCard(ctx, width, height, color) {
   card.style.left = `${cardX + 1}px`;
   card.style.top = `${cardY + 1}px`;
   card.style.setProperty('--route-color', color);
-  if (!anchor) return;
-
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = 1.5;
-  ctx.globalAlpha = 0.65;
-  ctx.setLineDash([3, 3]);
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(Math.max(cardX, Math.min(cardX + cardWidth, x)), Math.max(cardY, Math.min(cardY + cardHeight, y)));
-  ctx.stroke();
-  ctx.globalAlpha = 1;
-  ctx.beginPath();
-  ctx.arc(x, y, 4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
 }
 
 function mapTargetAt(x, y, pointerType) {
   const radius = pointerType === 'touch' ? 18 : 10;
   let marker = null;
   let bestDistance = radius ** 2;
-  for (const item of renderedMarkers) {
+  for (let i = renderedMarkers.length - 1; i >= 0; i--) {
+    const item = renderedMarkers[i];
     const distance = (item.x - x) ** 2 + (item.y - y) ** 2;
-    if (distance < bestDistance) {
+    const hitRadius = Math.max(radius, item.radius || 0);
+    if (distance < hitRadius ** 2 && (!marker || distance < bestDistance)) {
       bestDistance = distance;
       marker = item;
     }
@@ -682,6 +789,7 @@ function initMapInteractions() {
   const panel = document.getElementById('map-panel');
   const stage = panel.querySelector('.map-stage');
   let gesture = null;
+  let pinchScale = null;
 
   function cssPoint(e) {
     const rect = canvas.getBoundingClientRect();
@@ -701,9 +809,13 @@ function initMapInteractions() {
     tooltip.classList.toggle('hidden', !target);
     if (!target) return;
 
-    tooltip.textContent = waypoint
-      ? `${waypoint.name_zh} (${waypoint.id}) · ${ROLE_LABELS[waypoint.role] || waypoint.type}`
-      : legSummary(target.leg);
+    if (waypoint) {
+      const role = waypoint.groups?.map((group) => NODE_GROUPS[group].label).join(' / ')
+        || ROLE_LABELS[waypoint.role] || waypoint.type;
+      tooltip.textContent = `${nodeLabel(waypoint)} · ${role}`;
+    } else {
+      tooltip.textContent = target.count ? `${target.count} 个节点 · 点击放大` : legSummary(target.leg);
+    }
     const { offsetWidth, offsetHeight } = tooltip;
     tooltip.style.left = `${Math.max(8, Math.min(canvas.clientWidth - offsetWidth - 8, x + 12))}px`;
     const top = y - offsetHeight - 10;
@@ -728,9 +840,37 @@ function initMapInteractions() {
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+    if (pinchScale !== null) return;
+    const unit = e.deltaMode;
+    const pixelsPerUnit = unit === WheelEvent.DOM_DELTA_LINE ? 16
+      : unit === WheelEvent.DOM_DELTA_PAGE ? canvas.clientHeight : 1;
+    const delta = e.deltaY * pixelsPerUnit;
+    if (!delta) return;
+    const sensitivity = e.ctrlKey ? 0.0045 : 0.0016;
+    const step = Math.max(-0.16, Math.min(0.16, -delta * sensitivity));
     const { x, y } = cssPoint(e);
-    zoomAt(e.deltaY < 0 ? 1.25 : 0.8, x, y);
+    zoomAt(Math.exp(step), x, y);
   }, { passive: false });
+
+  canvas.addEventListener('gesturestart', (e) => {
+    e.preventDefault();
+    pinchScale = 1;
+  }, { passive: false });
+
+  canvas.addEventListener('gesturechange', (e) => {
+    e.preventDefault();
+    if (pinchScale === null || !Number.isFinite(e.scale) || e.scale <= 0) return;
+    const factor = (e.scale / pinchScale) ** 0.72;
+    pinchScale = e.scale;
+    const { x, y } = Number.isFinite(e.clientX) && Number.isFinite(e.clientY)
+      ? cssPoint(e)
+      : { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 };
+    zoomAt(factor, x, y);
+  }, { passive: false });
+
+  canvas.addEventListener('gestureend', () => {
+    pinchScale = null;
+  });
 
   canvas.addEventListener('dblclick', (e) => {
     const { x, y } = cssPoint(e);
@@ -780,6 +920,17 @@ function initMapInteractions() {
     finishGesture(e);
     if (!isTap) return;
     const target = mapTargetAt(x, y, e.pointerType);
+    if (view === graphView) {
+      if (target?.count) {
+        const worldPx = canvas.clientWidth * view.zoom;
+        view.centerMx += (target.x - canvas.clientWidth / 2) / worldPx;
+        view.centerMy += (target.y - canvas.clientHeight / 2) / worldPx;
+        zoomAt(Math.max(1.7, 2 / view.zoom), canvas.clientWidth / 2, canvas.clientHeight / 2);
+      } else {
+        selectGraphNode(target?.wp ?? null);
+      }
+      return;
+    }
     if (target?.leg) {
       const [px, py] = target.anchor;
       const worldPx = canvas.clientWidth * view.zoom;
@@ -887,6 +1038,179 @@ function initMapInteractions() {
   }
 }
 
+function selectGraphNode(node, recenter = false) {
+  selectedGraphNode = node;
+  document.getElementById('graph-card').classList.toggle('hidden', !node);
+  if (node) {
+    const label = nodeLabel(node);
+    document.getElementById('graph-node-name').textContent = label;
+    const labels = node.groups.map((group) => NODE_GROUPS[group].label).join(' / ');
+    const fullName = node.name_zh || node.name_en;
+    document.getElementById('graph-node-details').textContent = [
+      fullName && fullName !== label && !label.startsWith(`${fullName}（`) ? fullName : '',
+      labels,
+      node.country,
+      `${node.lon.toFixed(2)}, ${node.lat.toFixed(2)}`,
+    ].filter(Boolean).join(' · ');
+    document.getElementById('graph-endpoints').classList.toggle('hidden', node.groups.includes('passage'));
+    if (recenter) {
+      view.zoom = Math.max(view.zoom, 8);
+      view.centerMx = node.mx;
+      view.centerMy = node.my;
+      clampView();
+    }
+  }
+  clearMapHover();
+  drawWorldMap(currentRoutes, activeRouteId);
+}
+
+function prepareGraphLinks(links) {
+  const byMode = new Map();
+  for (const { mode, coords } of links) {
+    const points = unwrapMxs(coords || []);
+    if (points.length < 2) continue;
+    const xs = points.map(([mx]) => mx);
+    const ys = points.map(([, my]) => my);
+    const segments = byMode.get(mode) || [];
+    segments.push({ points, minMx: Math.min(...xs), maxMx: Math.max(...xs), minMy: Math.min(...ys), maxMy: Math.max(...ys) });
+    byMode.set(mode, segments);
+  }
+  return byMode;
+}
+
+function updateGraphSearch() {
+  const query = document.getElementById('graph-search').value.trim().toLowerCase();
+  const filter = document.getElementById('graph-type').value;
+  const results = document.getElementById('graph-results');
+  results.replaceChildren();
+  results.classList.toggle('hidden', !query || !graphNodes);
+  if (!query || !graphNodes) return;
+
+  const matches = graphNodes
+    .filter((node) => (!filter || node.groups.includes(filter)) && node.searchTerms.some((term) => term.includes(query)))
+    .sort((a, b) => Number(b.searchTerms.includes(query)) - Number(a.searchTerms.includes(query))
+      || Number(b.featured) - Number(a.featured));
+  if (!matches.length) results.textContent = '未找到匹配节点';
+  for (const node of matches.slice(0, 12)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = nodeLabel(node);
+    button.onclick = () => {
+      results.classList.add('hidden');
+      document.getElementById('graph-search').value = '';
+      selectGraphNode(node, true);
+      document.getElementById('close-graph-card').focus();
+    };
+    results.appendChild(button);
+  }
+}
+
+function setMapView(nextView) {
+  if (view === nextView) return;
+  view = nextView;
+  const isGraph = view === graphView;
+  document.getElementById('map-panel').dataset.view = isGraph ? 'graph' : 'routes';
+  document.getElementById('graph-view-btn').setAttribute('aria-pressed', String(isGraph));
+  document.getElementById('route-view-btn').setAttribute('aria-pressed', String(!isGraph));
+  document.querySelector('.map-stage').classList.remove('route-card-docked');
+  document.getElementById('graph-results').classList.add('hidden');
+  if (!isGraph && fitRoutesOnReturn) {
+    fitRoutesToView(currentRoutes);
+    fitRoutesOnReturn = false;
+  }
+  clampView();
+  clearMapHover();
+  drawWorldMap(currentRoutes, activeRouteId);
+}
+
+function initNodeGraph() {
+  const status = document.getElementById('graph-status');
+  const search = document.getElementById('graph-search');
+  const results = document.getElementById('graph-results');
+  const seaLayer = document.getElementById('sea-layer');
+  const landLayer = document.getElementById('land-layer');
+
+  document.getElementById('route-view-btn').onclick = () => setMapView(routeView);
+  document.getElementById('graph-view-btn').onclick = async () => {
+    setMapView(graphView);
+    if (graphNodes || nodesRequest) return;
+    status.textContent = '正在加载节点…';
+    nodesRequest = fetchJson('/v1/graph/nodes');
+    try {
+      const { nodes } = await nodesRequest;
+      graphNodes = nodes.map((node) => ({
+        ...node,
+        groups: nodeGroups(node),
+        mx: lonToMx(node.lon),
+        my: latToMy(node.lat),
+        searchTerms: [node.id, node.code, node.name_zh, node.name_en, NODE_SHORT_NAMES[node.id], ...(node.aliases || [])]
+          .filter(Boolean).map((term) => term.toLowerCase()),
+      }));
+      status.textContent = `${nodes.length.toLocaleString('zh-CN')} 个节点 · 放大查看全部`;
+      if (view === graphView) updateGraphSearch();
+      drawWorldMap(currentRoutes, activeRouteId);
+    } catch {
+      status.textContent = '节点加载失败，点击「节点图谱」重试';
+    } finally {
+      nodesRequest = null;
+    }
+  };
+
+  async function toggleLayers() {
+    if (!graphLinks && !linksRequest && (seaLayer.checked || landLayer.checked)) {
+      linksRequest = fetchJson('/v1/graph/links');
+      status.textContent = '正在加载线路图层…';
+      try {
+        const { sea, land } = await linksRequest;
+        graphLinks = { sea: prepareGraphLinks(sea), land: prepareGraphLinks(land) };
+        status.textContent = graphNodes ? `${graphNodes.length.toLocaleString('zh-CN')} 个节点 · 放大查看全部` : '';
+      } catch {
+        seaLayer.checked = false;
+        landLayer.checked = false;
+        status.textContent = '线路图层加载失败，请重新勾选';
+      } finally {
+        linksRequest = null;
+      }
+    }
+    drawWorldMap(currentRoutes, activeRouteId);
+  }
+
+  seaLayer.onchange = landLayer.onchange = toggleLayers;
+  search.oninput = search.onfocus = updateGraphSearch;
+  search.onkeydown = (event) => {
+    if (event.key === 'Escape') results.classList.add('hidden');
+    if (event.key === 'Enter' && !results.classList.contains('hidden')) results.querySelector('button')?.click();
+  };
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest('.graph-search')) results.classList.add('hidden');
+  });
+  document.getElementById('graph-type').onchange = () => {
+    const filter = document.getElementById('graph-type').value;
+    if (filter && !selectedGraphNode?.groups.includes(filter)) selectGraphNode(null);
+    updateGraphSearch();
+    drawWorldMap(currentRoutes, activeRouteId);
+  };
+  document.getElementById('close-graph-card').onclick = () => {
+    selectGraphNode(null);
+    search.focus();
+  };
+  for (const endpoint of ['from', 'to']) {
+    document.getElementById(`graph-set-${endpoint}`).onclick = () => {
+      if (!selectedGraphNode) return;
+      const input = document.getElementById(`${endpoint}-input`);
+      input.value = selectedGraphNode.id;
+      setMapView(routeView);
+      const panel = document.getElementById('map-panel');
+      if (document.fullscreenElement === panel || panel.classList.contains('map-maximized')) {
+        document.getElementById('fullscreen-btn').click();
+        document.getElementById('route-view-btn').focus();
+      } else {
+        input.focus();
+      }
+    };
+  }
+}
+
 function selectedModes() {
   return [...document.querySelectorAll('input[name="mode"]:checked')].map((el) => el.value);
 }
@@ -975,11 +1299,13 @@ function renderRoutes(routes, { compareData = null } = {}) {
   document.getElementById('route-picker').classList.toggle('hidden', !options.length);
 
   document.querySelector('.map-stage').classList.remove('route-card-docked');
-  fitRoutesToView(routes);
+  if (view === routeView) fitRoutesToView(routes);
+  else fitRoutesOnReturn = true;
   selectRoute(routes[0]?.routeId ?? null);
 }
 
 async function runQuery(isCompare = false) {
+  setMapView(routeView);
   const from = document.getElementById('from-input').value.trim();
   const to = document.getElementById('to-input').value.trim();
   const modes = selectedModes();
@@ -1016,6 +1342,7 @@ async function refreshHealth() {
 async function init() {
   initTheme();
   initMapInteractions();
+  initNodeGraph();
   clampView();
 
   fetchJson('/countries.geojson')

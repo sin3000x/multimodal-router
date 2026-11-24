@@ -28,6 +28,22 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     const nodesData = await nodesRes.json();
     assert.ok(nodesData.nodes.some((n) => n.id === 'NLRTM' && n.codeStandard === 'UN/LOCODE'));
 
+    const graphNodesRes = await fetch(`${baseUrl}/v1/graph/nodes`);
+    assert.equal(graphNodesRes.status, 200);
+    const graphNodes = await graphNodesRes.json();
+    assert.equal(graphNodes.graphVersion, health.graphVersion);
+    assert.ok(graphNodes.nodes.length > 100);
+    assert.ok(graphNodes.nodes.some((node) => node.id === 'PVG' && node.type === 'airport'));
+    assert.ok(graphNodes.nodes.every((node) => Number.isFinite(node.lon) && Number.isFinite(node.lat)));
+
+    const graphLinksRes = await fetch(`${baseUrl}/v1/graph/links`);
+    assert.equal(graphLinksRes.status, 200);
+    const graphLinks = await graphLinksRes.json();
+    assert.equal(graphLinks.graphVersion, health.graphVersion);
+    assert.equal(graphLinks.sea.length, health.counts.marnetEdges);
+    assert.equal(graphLinks.land.length, health.counts.landEdges);
+    assert.ok(graphLinks.land.every(({ coords }) => coords.length === 2 && coords.flat().every(Number.isFinite)));
+
     // 3. Chokepoints
     const cpRes = await fetch(`${baseUrl}/v1/chokepoints`);
     assert.equal(cpRes.status, 200);

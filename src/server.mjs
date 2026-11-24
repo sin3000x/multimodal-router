@@ -155,6 +155,28 @@ export async function createRouterService({
         return;
       }
 
+      if (req.method === 'GET' && pathname === '/v1/graph/nodes') {
+        const nodes = graph.nodes
+          .filter((node) => node.type !== 'country' && Number.isFinite(node.lon) && Number.isFinite(node.lat))
+          .map(({ id, code, type, functions, name_zh, name_en, country, lon, lat, aliases, curated, isMajor }) => ({
+            id, code, type, functions, name_zh, name_en, country, lon, lat, aliases,
+            featured: Boolean(curated || isMajor),
+          }));
+        sendJson(res, 200, { graphVersion: graph.graphVersion, nodes });
+        return;
+      }
+
+      if (req.method === 'GET' && pathname === '/v1/graph/links') {
+        const nodes = new Map(graph.nodes.map((node) => [node.id, [node.lon, node.lat]]));
+        const land = (graph.landEdges ?? []).flatMap(({ from, to, mode }) => {
+          const endpoints = [nodes.get(from), nodes.get(to)];
+          return endpoints.every((point) => point?.every(Number.isFinite)) ? [{ mode, coords: endpoints }] : [];
+        });
+        const sea = (graph.marnet?.edges ?? []).map(({ coords }) => ({ mode: 'sea', coords }));
+        sendJson(res, 200, { graphVersion: graph.graphVersion, sea, land });
+        return;
+      }
+
       if (req.method === 'GET' && pathname === '/v1/chokepoints') {
         const index = precomputed?.chokepointIndex ?? {};
         const items = router.chokepoints.map((cp) => ({

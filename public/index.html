@@ -69,37 +69,67 @@
     </aside>
 
     <section class="workspace">
-      <div id="map-panel" class="map-panel">
-        <div class="map-header">
-          <span id="route-summary">选择起终点并计算路径</span>
-          <div class="map-meta">
-            <div class="map-legend" aria-label="图例">
-              <span class="legend-item"><i class="swatch swatch-sea"></i>海运</span>
-              <span class="legend-item"><i class="swatch swatch-air"></i>空运</span>
-              <span class="legend-item"><i class="swatch swatch-rail"></i>铁路</span>
-              <span class="legend-item"><i class="swatch swatch-road"></i>公路</span>
+      <div id="map-panel" class="map-panel" data-view="routes">
+        <div class="map-heading">
+          <div class="map-view-switch" role="group" aria-label="地图视图">
+            <button id="route-view-btn" class="map-btn" type="button" aria-pressed="true">路径评估</button>
+            <button id="graph-view-btn" class="map-btn" type="button" aria-pressed="false">节点图谱</button>
+          </div>
+          <div class="map-header route-view">
+            <span id="route-summary">选择起终点并计算路径</span>
+            <div class="map-meta">
+              <div class="map-legend" aria-label="图例">
+                <span class="legend-item"><i class="swatch swatch-sea"></i>海运</span>
+                <span class="legend-item"><i class="swatch swatch-air"></i>空运</span>
+                <span class="legend-item"><i class="swatch swatch-rail"></i>铁路</span>
+                <span class="legend-item"><i class="swatch swatch-road"></i>公路</span>
+              </div>
+              <span id="cache-badge" class="cache-badge">—</span>
             </div>
-            <span id="cache-badge" class="cache-badge">—</span>
           </div>
         </div>
-        <label id="route-picker" class="route-picker hidden">
+        <label id="route-picker" class="route-picker route-view hidden">
           <span>路线</span>
           <select id="route-select"></select>
         </label>
+        <div class="graph-toolbar graph-view">
+          <div class="graph-search">
+            <input id="graph-search" type="search" placeholder="搜索节点名称或代码" aria-label="搜索节点名称或代码" />
+            <div id="graph-results" class="graph-results hidden" aria-label="节点搜索结果"></div>
+          </div>
+          <select id="graph-type" aria-label="节点类型">
+            <option value="">全部类型</option>
+            <option value="port">港口</option>
+            <option value="airport">机场</option>
+            <option value="city">城市</option>
+            <option value="land">陆铁枢纽与口岸</option>
+            <option value="passage">咽喉与空域</option>
+          </select>
+          <label><input type="checkbox" id="sea-layer" /> 海运航道</label>
+          <label><input type="checkbox" id="land-layer" /> 陆铁走廊</label>
+          <span id="graph-status" role="status"></span>
+        </div>
+        <div class="map-legend graph-legend graph-view" aria-label="节点图例">
+          <span class="legend-item"><i class="node-dot node-port"></i>港口</span>
+          <span class="legend-item"><i class="node-dot node-airport"></i>机场</span>
+          <span class="legend-item"><i class="node-dot node-city"></i>城市</span>
+          <span class="legend-item"><i class="node-dot node-land"></i>陆铁枢纽与口岸</span>
+          <span class="legend-item"><i class="node-dot node-passage"></i>咽喉与空域</span>
+        </div>
         <div class="map-stage">
           <div class="map-viewport">
             <canvas id="world-map"></canvas>
             <div class="map-controls" role="toolbar" aria-label="地图视图控制">
               <button id="zoom-in-btn" type="button" class="map-btn" title="放大">+</button>
               <button id="zoom-out-btn" type="button" class="map-btn" title="缩小">−</button>
-              <button id="fit-route-btn" type="button" class="map-btn map-btn-wide" title="缩放到当前选中路线" disabled>适配路线</button>
+              <button id="fit-route-btn" type="button" class="map-btn map-btn-wide route-view" title="缩放到当前选中路线" disabled>适配路线</button>
               <button id="reset-zoom-btn" type="button" class="map-btn map-btn-wide" title="恢复全球视图">全球</button>
               <span id="zoom-level" class="zoom-badge">1.0x</span>
               <button id="fullscreen-btn" type="button" class="map-btn map-btn-wide" aria-pressed="false">全屏</button>
             </div>
             <div id="map-tooltip" class="map-tooltip hidden"></div>
           </div>
-          <article id="map-route-card" class="map-route-card hidden" aria-label="选中路线详情">
+          <article id="map-route-card" class="map-route-card route-view hidden" aria-label="选中路线详情">
             <div class="card-head">
               <span id="card-mode" class="mode-tag"></span>
               <span id="card-likelihood" class="likelihood"></span>
@@ -118,8 +148,19 @@
               <ul id="card-leg-list" class="legs"></ul>
             </details>
           </article>
+          <article id="graph-card" class="map-route-card graph-card graph-view hidden" aria-label="节点详情">
+            <div class="card-head">
+              <strong id="graph-node-name"></strong>
+              <button id="close-graph-card" class="map-btn" type="button" aria-label="关闭节点详情">×</button>
+            </div>
+            <div id="graph-node-details"></div>
+            <div id="graph-endpoints" class="graph-endpoints">
+              <button id="graph-set-from" class="map-btn" type="button">设为起点</button>
+              <button id="graph-set-to" class="map-btn" type="button">设为终点</button>
+            </div>
+          </article>
         </div>
-        <div id="impact-banner" class="impact-banner hidden"></div>
+        <div id="impact-banner" class="impact-banner route-view hidden"></div>
       </div>
     </section>
   </main>

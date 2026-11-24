@@ -236,13 +236,81 @@ body {
   inset: 0;
   z-index: 10;
 }
+.map-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.map-view-switch { display: flex; flex: none; gap: 5px; }
+.map-view-switch .map-btn { height: 26px; padding: 0 10px; }
+.map-view-switch [aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.map-panel[data-view="routes"] .graph-view,
+.map-panel[data-view="graph"] .route-view { display: none; }
+
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.graph-toolbar input[type="search"], .graph-toolbar select {
+  padding: 5px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+}
+.graph-toolbar label { display: inline-flex; align-items: center; white-space: nowrap; }
+#graph-status, #graph-node-details { color: var(--muted); }
+.graph-search { position: relative; }
+.graph-results {
+  position: absolute;
+  z-index: 6;
+  inset: calc(100% + 4px) auto auto 0;
+  width: 280px;
+  max-height: 268px;
+  overflow: auto;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.24);
+}
+.graph-results button {
+  display: block;
+  width: 100%;
+  padding: 6px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.graph-results button:hover, .graph-results button:focus-visible { background: var(--surface-hover); }
+.graph-legend { flex-wrap: wrap; margin-bottom: 8px; }
+.node-dot { width: 8px; height: 8px; border-radius: 50%; }
+.node-port { background: var(--sea); }
+.node-airport { background: var(--air); }
+.node-city { background: var(--map-label-text); }
+.node-land { background: var(--rail); }
+.node-passage { background: var(--road); }
 .map-header {
   display: flex;
+  flex: 1;
   justify-content: space-between;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 8px;
   font-size: 13px;
   font-weight: 600;
 }
@@ -409,6 +477,9 @@ body {
 
 .card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
 .card-head button { flex: none; margin-left: auto; }
+.graph-card { left: 10px; bottom: 10px; font-size: 12px; }
+.graph-endpoints { display: flex; gap: 6px; margin-top: 8px; }
+.graph-endpoints.hidden { display: none; }
 .mode-tag { flex: none; font-size: 11px; font-weight: 700; color: var(--text); }
 
 .likelihood { font-size: 11px; color: var(--muted); }
