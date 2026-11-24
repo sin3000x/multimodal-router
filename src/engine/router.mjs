@@ -2,8 +2,10 @@ import { haversineKm, normalizeLon } from './geo.mjs';
 import { createSeaRouter } from './sea-router.mjs';
 import { createAirRouter } from './air-router.mjs';
 import { createLandRouter } from './land-router.mjs';
+import endpointNamesZh from '../../data/curated/endpoint-names-zh.json' with { type: 'json' };
 
 const fold = (s) => String(s ?? '').normalize('NFKC').trim().toLowerCase();
+const passageTypes = new Set(['chokepoint', 'airspace', 'sea_area']);
 
 export function createRouter(compiledGraph) {
   const nodes = compiledGraph.nodes ?? [];
@@ -11,6 +13,7 @@ export function createRouter(compiledGraph) {
   const nodeByLegacyId = new Map();
   const nodeByCode = new Map();
   const nodesByAlias = new Map();
+  const searchTermsById = new Map();
   const landConnectionsByNode = new Map();
 
   for (const edge of compiledGraph.landEdges ?? []) {
@@ -37,16 +40,17 @@ export function createRouter(compiledGraph) {
         nodeByCode.set(cKey, node);
       }
     }
-    for (const raw of [
-      node.id,
+    const names = [
       node.name_zh,
       node.name_en,
-      node.code,
-      ...(node.legacyIds ?? []),
-      ...(node.aliases ?? []),
-    ]) {
-      const k = fold(raw);
-      if (!k) continue;
+      ...(Object.hasOwn(endpointNamesZh, node.id) ? endpointNamesZh[node.id] : []),
+    ].map(fold).filter(Boolean);
+    const codes = [node.id, node.code, ...(node.legacyIds ?? [])].map(fold).filter(Boolean);
+    const aliases = (node.aliases ?? []).map(fold).filter(Boolean);
+    searchTermsById.set(node.id, { names, codes, aliases });
+    for (const k of new Set([
+      ...names, ...codes, ...aliases,
+    ])) {
       if (!nodesByAlias.has(k)) nodesByAlias.set(k, []);
       nodesByAlias.get(k).push(node);
     }
@@ -107,26 +111,23 @@ export function createRouter(compiledGraph) {
     return null;
   }
 
-  function searchNodes({ q = '', type = '', limit = 20 } = {}) {
+  function searchNodes({ q = '', type = '', limit = 20, endpoint = false } = {}) {
     const query = fold(q);
     const matches = [];
     for (const n of nodes) {
       if (n.type === 'country') continue;
+      if (endpoint && passageTypes.has(n.type)) continue;
       if (type && n.type !== type) continue;
       if (!query) {
         if (n.curated || n.isMajor) matches.push({ node: n, score: n.curated ? 100 : 50 });
         continue;
       }
-      const id = fold(n.id);
-      const code = fold(n.code);
-      const zh = fold(n.name_zh);
-      const en = fold(n.name_en);
+      const { names, codes, aliases } = searchTermsById.get(n.id);
       let score = 0;
-      if (id === query || code === query || zh === query || en === query) score = 200;
-      else if (code.startsWith(query) || en.startsWith(query) || zh.startsWith(query)) score = 120;
-      else if (zh.includes(query) || en.includes(query) || (n.aliases ?? []).some((a) => fold(a).includes(query))) {
-        score = 60;
-      }
+      if (codes.includes(query) || names.includes(query)) score = 200;
+      else if (aliases.includes(query)) score = 180;
+      else if ([...codes, ...names, ...aliases].some((term) => term.startsWith(query))) score = 120;
+      else if ([...names, ...aliases].some((term) => term.includes(query))) score = 60;
       if (score > 0) {
         if (n.curated) score += 40;
         if (n.type === 'city') score += 20;
@@ -141,7 +142,7 @@ export function createRouter(compiledGraph) {
       functions: node.functions ?? [node.type],
       code: node.code ?? null,
       codeStandard: node.codeStandard ?? 'custom',
-      name_zh: node.name_zh,
+      name_zh: endpoint && Object.hasOwn(endpointNamesZh, node.id) ? endpointNamesZh[node.id][0] : node.name_zh,
       name_en: node.name_en,
       country: node.country,
       lon: node.lon,

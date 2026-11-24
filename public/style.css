@@ -182,6 +182,37 @@ body {
   font-size: 13px;
 }
 
+.endpoint-field { position: relative; }
+.endpoint-dropdown {
+  position: absolute;
+  z-index: 7;
+  inset: calc(100% + 4px) 0 auto;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
+}
+.endpoint-dropdown [role="option"] {
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.endpoint-dropdown [role="option"]:hover,
+.endpoint-dropdown [aria-selected="true"] { background: var(--surface-hover); }
+.endpoint-dropdown strong { display: block; color: var(--text); font-size: 13px; }
+.endpoint-dropdown small { display: block; font-size: 11px; }
+.endpoint-message { padding: 6px 8px; }
+.endpoint-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
 .quick-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .preset-btn {
   background: var(--surface);

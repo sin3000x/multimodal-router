@@ -147,10 +147,11 @@ export async function createRouterService({
       if (req.method === 'GET' && pathname === '/v1/nodes') {
         const q = url.searchParams.get('q') ?? '';
         const type = url.searchParams.get('type') ?? '';
+        const endpoint = url.searchParams.get('endpoint') === '1';
         const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 20) || 20));
         sendJson(res, 200, {
           graphVersion: graph.graphVersion,
-          nodes: router.searchNodes({ q, type, limit }),
+          nodes: router.searchNodes({ q, type, limit, endpoint }),
         });
         return;
       }

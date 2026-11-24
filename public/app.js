@@ -1,3 +1,5 @@
+import { createEndpointPicker } from './endpoint-picker.js';
+
 const KEY_AVOID_IDS = new Set([
   'CP_SUEZ',
   'CP_BAB',
@@ -83,6 +85,15 @@ function nodeGroups(node) {
   const groups = ['city', 'port'].filter((type) => node.type === type || node.functions?.includes(type));
   if (!['city', 'port'].includes(node.type)) groups.push('land');
   return groups;
+}
+
+function describeEndpoint(node) {
+  const name = NODE_SHORT_NAMES[node.code || node.id] || node.name_zh || node.name_en || node.id;
+  const types = nodeGroups(node).map((group) => NODE_GROUPS[group].label);
+  return {
+    title: name === node.id ? name : `${name}（${node.code || node.id}）`,
+    detail: [...types, node.country, node.name_en !== name && node.name_en].filter(Boolean).join(' · '),
+  };
 }
 
 async function fetchJson(url, options) {
@@ -1198,7 +1209,7 @@ function initNodeGraph() {
     document.getElementById(`graph-set-${endpoint}`).onclick = () => {
       if (!selectedGraphNode) return;
       const input = document.getElementById(`${endpoint}-input`);
-      input.value = selectedGraphNode.id;
+      endpointPickers[endpoint].setNode(selectedGraphNode);
       setMapView(routeView);
       const panel = document.getElementById('map-panel');
       if (document.fullscreenElement === panel || panel.classList.contains('map-maximized')) {
@@ -1306,17 +1317,36 @@ function renderRoutes(routes, { compareData = null } = {}) {
 
 async function runQuery(isCompare = false) {
   setMapView(routeView);
-  const from = document.getElementById('from-input').value.trim();
-  const to = document.getElementById('to-input').value.trim();
+  const from = endpointPickers.from.value;
+  const to = endpointPickers.to.value;
+  const summary = document.getElementById('route-summary');
+  for (const picker of Object.values(endpointPickers)) picker.close();
+  if (!from || !to) {
+    summary.textContent = `请输入${!from ? '起运地' : '目的地'}`;
+    document.getElementById(`${!from ? 'from' : 'to'}-input`).focus();
+    return;
+  }
   const modes = selectedModes();
   const avoid = selectedAvoid();
 
   const endpoint = isCompare ? '/v1/routes/compare' : '/v1/routes';
-  const data = await fetchJson(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ from, to, modes, avoid, maxRoutes: 8, includeGeometry: true }),
-  });
+  let data;
+  try {
+    data = await fetchJson(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ from, to, modes, avoid, maxRoutes: 8, includeGeometry: true }),
+    });
+  } catch (error) {
+    if (error.message.startsWith('Unknown origin node:')) {
+      summary.textContent = `未找到起运地「${from}」，可输入地点名并从候选中选择`;
+    } else if (error.message.startsWith('Unknown destination node:')) {
+      summary.textContent = `未找到目的地「${to}」，可输入地点名并从候选中选择`;
+    } else {
+      summary.textContent = `路径计算失败：${error.message}`;
+    }
+    return;
+  }
 
   currentEndpoints = { origin: data.origin, destination: data.destination };
 
@@ -1328,7 +1358,7 @@ async function runQuery(isCompare = false) {
   }
 
   const routes = isCompare ? [...(data.alternatives || []), ...(data.landSubstitutions || [])] : data.routes || [];
-  document.getElementById('route-summary').textContent = `${data.origin.name_zh} → ${data.destination.name_zh} · 共 ${routes.length} 条评估路径`;
+  summary.textContent = `${data.origin.name_zh} → ${data.destination.name_zh} · 共 ${routes.length} 条评估路径`;
   renderRoutes(routes, { compareData: isCompare ? data : null });
   refreshHealth();
 }
@@ -1352,18 +1382,7 @@ async function init() {
     })
     .catch((err) => console.warn('Failed to load basemap:', err));
 
-  const [nodesRes, cpRes] = await Promise.all([
-    fetchJson('/v1/nodes?limit=100'),
-    fetchJson('/v1/chokepoints'),
-  ]);
-
-  const datalist = document.getElementById('node-options');
-  for (const n of nodesRes.nodes) {
-    const opt = document.createElement('option');
-    opt.value = n.id;
-    opt.label = `${n.name_zh} / ${n.name_en}${n.code ? ' (' + n.code + ')' : ''}`;
-    datalist.appendChild(opt);
-  }
+  const cpRes = await fetchJson('/v1/chokepoints');
 
   const cpList = document.getElementById('chokepoint-list');
   const sortedCps = [...cpRes.chokepoints].sort(
@@ -1392,6 +1411,15 @@ async function init() {
 
   await runQuery(false);
 }
+
+const endpointPickers = Object.fromEntries(['from', 'to'].map((key) => [
+  key,
+  createEndpointPicker(document.getElementById(`${key}-input`), {
+    fetchJson,
+    describe: describeEndpoint,
+    submit: () => runQuery(),
+  }),
+]));
 
 init().catch((err) => {
   console.error(err);

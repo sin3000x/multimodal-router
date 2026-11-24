@@ -28,15 +28,28 @@
       <div class="control-settings">
         <section class="panel">
           <h2>起终点设置</h2>
-          <label class="field">
-            <span>起运地（UN/LOCODE / IATA / 城市名）</span>
-            <input id="from-input" list="node-options" value="CNSZX" placeholder="例如 CNSZX, 深圳, CNYTN, SZX" />
-          </label>
-          <label class="field">
-            <span>目的地（UN/LOCODE / IATA / 城市名）</span>
-            <input id="to-input" list="node-options" value="NLAMS" placeholder="例如 NLAMS, 阿姆斯特丹, DXB, MXMEX" />
-          </label>
-          <datalist id="node-options"></datalist>
+          <div class="field endpoint-field">
+            <label for="from-input">起运地</label>
+            <input id="from-input" role="combobox" aria-autocomplete="list" aria-expanded="false"
+              aria-controls="from-options" autocomplete="off" spellcheck="false"
+              value="CNSZX" placeholder="例如 深圳、盐田港、SZX" />
+            <div class="endpoint-dropdown" hidden>
+              <div id="from-options" role="listbox" aria-label="起运地候选"></div>
+              <div class="endpoint-message" aria-hidden="true"></div>
+            </div>
+            <span class="endpoint-status" role="status"></span>
+          </div>
+          <div class="field endpoint-field">
+            <label for="to-input">目的地</label>
+            <input id="to-input" role="combobox" aria-autocomplete="list" aria-expanded="false"
+              aria-controls="to-options" autocomplete="off" spellcheck="false"
+              value="NLAMS" placeholder="例如 阿姆斯特丹、迪拜、NLAMS" />
+            <div class="endpoint-dropdown" hidden>
+              <div id="to-options" role="listbox" aria-label="目的地候选"></div>
+              <div class="endpoint-message" aria-hidden="true"></div>
+            </div>
+            <span class="endpoint-status" role="status"></span>
+          </div>
 
           <div class="quick-presets">
             <button type="button" class="preset-btn" data-from="CNSZX" data-to="NLAMS">深圳 → 阿姆斯特丹</button>
