@@ -68,6 +68,7 @@ let graphLinks = null;
 let nodesRequest = null;
 let linksRequest = null;
 let selectedGraphNode = null;
+let graphMarkerCache = null;
 let renderedMarkers = [];
 let renderedLegs = [];
 let hoveredWaypointId = null;
@@ -430,41 +431,55 @@ function drawGraphLinks(ctx, tokens, width, height) {
   }
 }
 
+function getGraphMarkers(width, filter) {
+  const { zoom } = view;
+  const worldPx = width * zoom;
+  if (graphMarkerCache?.worldPx === worldPx && graphMarkerCache.zoom === zoom &&
+      graphMarkerCache.filter === filter && graphMarkerCache.selected === selectedGraphNode) {
+    return graphMarkerCache.markers;
+  }
+
+  // Keep cells and their centers fixed in world coordinates when the viewport moves.
+  const cellScale = worldPx / 32;
+  const cells = new Map();
+  const markers = [];
+  for (const node of graphNodes) {
+    const selected = node === selectedGraphNode;
+    if (!selected && ((filter && !node.groups.includes(filter)) || (zoom < 2 && !node.featured))) continue;
+    if (selected || zoom >= 8) {
+      markers.push({ wp: node, mx: node.mx, my: node.my });
+      continue;
+    }
+    const key = `${Math.floor(node.mx * cellScale)},${Math.floor(node.my * cellScale)}`;
+    const cell = cells.get(key) || { wp: node, count: 0, mx: 0, my: 0 };
+    cell.count++;
+    cell.mx += node.mx;
+    cell.my += node.my;
+    cells.set(key, cell);
+  }
+
+  for (const { wp, count, mx, my } of cells.values()) {
+    markers.push(count === 1 ? { wp, mx, my } : { count, mx: mx / count, my: my / count });
+  }
+  markers.sort((a, b) => Number(a.wp === selectedGraphNode) - Number(b.wp === selectedGraphNode));
+  graphMarkerCache = { worldPx, zoom, filter, selected: selectedGraphNode, markers };
+  return markers;
+}
+
 function drawNodeGraph(ctx, tokens, width, height) {
   renderedMarkers = [];
   renderedLegs = [];
   if (!graphNodes) return;
   drawGraphLinks(ctx, tokens, width, height);
   const filter = document.getElementById('graph-type').value;
-  const cells = new Map();
+  const offsets = [...visibleWorldOffsets()];
   const markers = [];
-  for (const node of graphNodes) {
-    const selected = node === selectedGraphNode;
-    if (!selected && ((filter && !node.groups.includes(filter)) || (view.zoom < 2 && !node.featured))) continue;
-    const [x, y] = projectRaw(nearestCopyMx(node.mx), node.my, width, height);
-    if (x < 0 || x > width || y < 0 || y > height) continue;
-    const marker = { wp: node, x, y };
-    if (selected || view.zoom >= 8) {
-      markers.push(marker);
-      continue;
+  for (const { wp, count, mx, my } of getGraphMarkers(width, filter)) {
+    for (const offset of offsets) {
+      const [x, y] = projectRaw(mx + offset, my, width, height);
+      if (x >= 0 && x <= width && y >= 0 && y <= height) markers.push({ wp, count, x, y });
     }
-    const key = `${Math.floor(x / 32)},${Math.floor(y / 32)}`;
-    const cell = cells.get(key) || [];
-    cell.push(marker);
-    cells.set(key, cell);
   }
-
-  for (const cell of cells.values()) {
-    if (cell.length === 1) {
-      markers.push(cell[0]);
-      continue;
-    }
-    const x = cell.reduce((sum, marker) => sum + marker.x, 0) / cell.length;
-    const y = cell.reduce((sum, marker) => sum + marker.y, 0) / cell.length;
-    markers.push({ count: cell.length, x, y });
-  }
-
-  markers.sort((a, b) => Number(a.wp === selectedGraphNode) - Number(b.wp === selectedGraphNode));
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
