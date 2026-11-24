@@ -34,6 +34,18 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     assert.ok(shanghai.some((n) => n.id === 'PVG' && n.name_zh === '上海浦东机场'));
     assert.ok(shanghai.some((n) => n.id === 'SHA'));
 
+    const shenzhenPorts = ['CNYTN', 'CNSHK', 'CNCWN', 'CNMWN', 'CNDCB'];
+    for (const q of ['深圳', '深圳港', 'Shenzhen']) {
+      const res = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q, endpoint: '1', limit: '8' })}`);
+      assert.equal(res.status, 200);
+      const { nodes } = await res.json();
+      assert.equal(nodes[0].id, 'CNSZX');
+      assert.deepEqual(nodes.filter((node) => node.type === 'port').map((node) => node.id).sort(), [...shenzhenPorts].sort());
+    }
+
+    const shekouRes = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q: '深圳蛇口', endpoint: '1' })}`);
+    assert.deepEqual((await shekouRes.json()).nodes.map((node) => node.id), ['CNSHK']);
+
     const passageRes = await fetch(`${baseUrl}/v1/nodes?${new URLSearchParams({ q: '苏伊士运河', endpoint: '1' })}`);
     assert.deepEqual((await passageRes.json()).nodes, []);
 
@@ -91,6 +103,12 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     const airportRes = await fetch(`${baseUrl}/v1/routes?${new URLSearchParams({ from: '浦东机场', to: '阿姆斯特丹', modes: 'air' })}`);
     assert.equal(airportRes.status, 200);
     assert.equal((await airportRes.json()).origin.id, 'PVG');
+
+    const portRes = await fetch(`${baseUrl}/v1/routes?${new URLSearchParams({ from: 'CNSHK', to: 'NLAMS', modes: 'sea' })}`);
+    assert.equal(portRes.status, 200);
+    const portRoute = await portRes.json();
+    assert.equal(portRoute.origin.id, 'CNSHK');
+    assert.ok(portRoute.routes.some((route) => route.originGateway.id === 'CNSHK'));
 
     // 5. POST /v1/routes/compare
     const cmpRes = await fetch(`${baseUrl}/v1/routes/compare`, {

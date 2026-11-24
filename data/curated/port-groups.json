@@ -1,0 +1,6 @@
+{
+  "CNSZX": {
+    "aliases": ["深圳港", "Shenzhen Port"],
+    "ports": ["CNYTN", "CNSHK", "CNCWN", "CNMWN", "CNDCB"]
+  }
+}

@@ -3,6 +3,7 @@ import { createSeaRouter } from './sea-router.mjs';
 import { createAirRouter } from './air-router.mjs';
 import { createLandRouter } from './land-router.mjs';
 import endpointNamesZh from '../../data/curated/endpoint-names-zh.json' with { type: 'json' };
+import portGroups from '../../data/curated/port-groups.json' with { type: 'json' };
 
 const fold = (s) => String(s ?? '').normalize('NFKC').trim().toLowerCase();
 const passageTypes = new Set(['chokepoint', 'airspace', 'sea_area']);
@@ -14,7 +15,15 @@ export function createRouter(compiledGraph) {
   const nodeByCode = new Map();
   const nodesByAlias = new Map();
   const searchTermsById = new Map();
+  const portGroupNamesById = new Map();
   const landConnectionsByNode = new Map();
+
+  for (const [cityId, { aliases, ports }] of Object.entries(portGroups)) {
+    const city = nodeById.get(cityId);
+    if (!city) continue;
+    const names = [city.name_zh, city.name_en, ...aliases].map(fold).filter(Boolean);
+    for (const portId of ports) portGroupNamesById.set(portId, names);
+  }
 
   for (const edge of compiledGraph.landEdges ?? []) {
     if (!landConnectionsByNode.has(edge.from)) landConnectionsByNode.set(edge.from, []);
@@ -46,7 +55,8 @@ export function createRouter(compiledGraph) {
       ...(Object.hasOwn(endpointNamesZh, node.id) ? endpointNamesZh[node.id] : []),
     ].map(fold).filter(Boolean);
     const codes = [node.id, node.code, ...(node.legacyIds ?? [])].map(fold).filter(Boolean);
-    const aliases = (node.aliases ?? []).map(fold).filter(Boolean);
+    const groupAliases = Object.hasOwn(portGroups, node.id) ? portGroups[node.id].aliases : [];
+    const aliases = [...(node.aliases ?? []), ...groupAliases].map(fold).filter(Boolean);
     searchTermsById.set(node.id, { names, codes, aliases });
     for (const k of new Set([
       ...names, ...codes, ...aliases,
@@ -128,6 +138,14 @@ export function createRouter(compiledGraph) {
       else if (aliases.includes(query)) score = 180;
       else if ([...codes, ...names, ...aliases].some((term) => term.startsWith(query))) score = 120;
       else if ([...names, ...aliases].some((term) => term.includes(query))) score = 60;
+      if (endpoint && score < 150) {
+        const groupNames = portGroupNamesById.get(n.id) ?? [];
+        if (groupNames.some((group) => {
+          if (!query.startsWith(group)) return false;
+          const portQuery = query.slice(group.length).trim();
+          return !portQuery || [...names, ...aliases].some((term) => term.startsWith(portQuery));
+        })) score = 150;
+      }
       if (score > 0) {
         if (n.curated) score += 40;
         if (n.type === 'city') score += 20;
