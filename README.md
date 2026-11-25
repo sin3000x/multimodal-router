@@ -64,9 +64,12 @@ npm run service:status   # 查看进程与 /health 状态
 npm run service:logs     # 查看最近日志
 ```
 
-## HTTP API
+## 文档索引
 
-完整接口参数、响应字段与接入规范请查看 [docs/API.md](docs/API.md)（由 [public/api-docs-data.js](public/api-docs-data.js) 通过 `npm run docs:api` 自动生成，与前端「API 说明」弹窗共用同一数据源并保持同步）。
+- **算法与架构设计**：[docs/ALGORITHM.md](docs/ALGORITHM.md)（分模态寻路算法、成本/时效评分公式、WorldMonitor 缓存模式与维护指南）
+- **HTTP API 文档**：[docs/API.md](docs/API.md)（由 [public/api-docs-data.js](public/api-docs-data.js) 通过 `npm run docs:api` 自动生成，与前端「API 说明」弹窗共用同一数据源并保持同步）
+
+## HTTP API
 
 首页顶部的「API 说明」提供全部 HTTP 接口的请求/响应字段文档、在线试调（Try-it-out）、JSON/cURL 复制、可搜索参数词表以及编码/缓存/状态码接入规范。
 
