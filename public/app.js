@@ -36,9 +36,12 @@ const NODE_GROUPS = {
   port: { label: '港口', color: 'sea' },
   airport: { label: '机场', color: 'air' },
   city: { label: '城市', color: 'city' },
-  land: { label: '陆铁枢纽与口岸', color: 'rail' },
+  land: { label: '陆铁枢纽', color: 'rail' },
+  roadBorder: { label: '公路口岸', color: 'road' },
+  railBorder: { label: '铁路口岸', color: 'rail' },
   passage: { label: '咽喉与空域', color: 'road' },
 };
+const GATEWAY_LABELS = { water: '水运口岸', air: '航空口岸', land: '陆路口岸' };
 const NODE_SHORT_NAMES = { HKG: '香港机场', PVG: '上海浦东机场' };
 const THEME_KEY = 'mmr-theme';
 const GRAPH_DETAIL_ZOOM = 8;
@@ -112,9 +115,19 @@ function nodeLabel(node) {
 function nodeGroups(node) {
   if (['chokepoint', 'airspace', 'sea_area'].includes(node.type)) return ['passage'];
   if (['airport', 'hub_airport'].includes(node.type)) return ['airport'];
+  if (node.type === 'border') return ['roadBorder'];
+  if (node.type === 'rail_border') return ['railBorder'];
+  if (node.type === 'ferry_port') return ['port'];
   const groups = ['city', 'port'].filter((type) => node.type === type || node.functions?.includes(type));
   if (!['city', 'port'].includes(node.type)) groups.push('land');
   return groups;
+}
+
+function matchesGraphFilter(node, filter) {
+  if (!filter) return true;
+  if (filter === 'gateway') return Boolean(node.gatewayType);
+  if (filter.startsWith('gateway-')) return filter === `gateway-${node.gatewayType}`;
+  return node.groups.includes(filter);
 }
 
 function describeEndpoint(node) {
@@ -773,7 +786,7 @@ function getGraphMarkers(width, filter) {
   const markers = [];
   for (const node of graphNodes) {
     const selected = node === selectedGraphNode;
-    if (!selected && ((filter && !node.groups.includes(filter)) || (majorOnly && !node.featured))) continue;
+    if (!selected && (!matchesGraphFilter(node, filter) || (majorOnly && !node.featured))) continue;
     if (selected || zoom >= GRAPH_DETAIL_ZOOM) {
       markers.push({ wp: node, mx: node.mx, my: node.my });
       continue;
@@ -825,11 +838,18 @@ function drawNodeGraph(ctx, tokens, width, height) {
     ctx.arc(x, y, radius, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    if (wp?.gatewayType) {
+      ctx.strokeStyle = tokens.labelText;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x, y, radius + 2, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     if (count) {
       ctx.fillStyle = tokens.labelText;
       ctx.fillText(count, x, y + 0.5);
     }
-    renderedMarkers.push({ ...marker, radius });
+    renderedMarkers.push({ ...marker, radius: wp?.gatewayType ? radius + 3 : radius });
   }
   ctx.restore();
   const detailed = view.zoom >= GRAPH_DETAIL_ZOOM;
@@ -1455,6 +1475,7 @@ function renderGraphNodeCard(node) {
     badgesEl.appendChild(span);
   };
   for (const group of node.groups) addBadge(NODE_GROUPS[group].label);
+  if (node.gatewayType && node.gatewayType !== 'land') addBadge(GATEWAY_LABELS[node.gatewayType], true);
   if (node.portTier) addBadge(`Tier ${node.portTier} 港口`, node.portTier === 1);
   if (node.airportSize === 'large_airport') addBadge('大型机场', true);
   else if (node.airportSize === 'medium_airport') addBadge('中型机场');
@@ -1645,7 +1666,7 @@ function updateGraphStatus() {
   if (!graphNodes) return;
   const filter = document.getElementById('graph-type').value;
   const majorOnly = Boolean(document.getElementById('graph-major-only')?.checked);
-  const visibleCount = graphNodes.filter((n) => (!filter || n.groups.includes(filter)) && (!majorOnly || n.featured)).length;
+  const visibleCount = graphNodes.filter((n) => matchesGraphFilter(n, filter) && (!majorOnly || n.featured)).length;
   const totalCount = graphNodes.length;
   const nodePart = visibleCount === totalCount
     ? `全部 ${totalCount.toLocaleString('zh-CN')} 个节点`
@@ -1689,14 +1710,10 @@ async function ensureGraphLayer(layer) {
 
 function updateGraphLegendCounts() {
   if (!graphNodes) return;
-  const counts = {};
-  for (const node of graphNodes) {
-    for (const g of node.groups) counts[g] = (counts[g] || 0) + 1;
-  }
   for (const btn of document.querySelectorAll('.graph-legend-btn')) {
     const group = btn.dataset.graphGroup;
     const span = btn.querySelector('.legend-count');
-    if (span) span.textContent = (counts[group] || 0).toLocaleString('zh-CN');
+    if (span) span.textContent = graphNodes.filter((node) => matchesGraphFilter(node, group)).length.toLocaleString('zh-CN');
   }
 }
 
@@ -1716,7 +1733,7 @@ function updateGraphSearch() {
   if (!query || !graphNodes) return;
 
   const matches = graphNodes
-    .filter((node) => (!filter || node.groups.includes(filter)) && node.searchTerms.some((term) => term.includes(query)))
+    .filter((node) => matchesGraphFilter(node, filter) && node.searchTerms.some((term) => term.includes(query)))
     .sort((a, b) => Number(b.searchTerms.includes(query)) - Number(a.searchTerms.includes(query))
       || Number(b.featured) - Number(a.featured));
   if (!matches.length) results.textContent = '未找到匹配节点';
@@ -1771,7 +1788,10 @@ function initNodeGraph() {
         groups: nodeGroups(node),
         mx: lonToMx(node.lon),
         my: latToMy(node.lat),
-        searchTerms: [node.id, node.code, node.name_zh, node.name_en, NODE_SHORT_NAMES[node.id], ...(node.aliases || [])]
+        searchTerms: [
+          node.id, node.code, node.name_zh, node.name_en, NODE_SHORT_NAMES[node.id],
+          GATEWAY_LABELS[node.gatewayType], ...(node.aliases || []),
+        ]
           .filter(Boolean).map((term) => term.toLowerCase()),
       }));
       graphNodeById = new Map(graphNodes.map((n) => [n.id, n]));
@@ -1821,7 +1841,7 @@ function initNodeGraph() {
   });
   document.getElementById('graph-type').onchange = () => {
     const filter = document.getElementById('graph-type').value;
-    if (filter && !selectedGraphNode?.groups.includes(filter)) selectGraphNode(null);
+    if (selectedGraphNode && !matchesGraphFilter(selectedGraphNode, filter)) selectGraphNode(null);
     syncGraphLegendButtons();
     updateGraphStatus();
     updateGraphSearch();

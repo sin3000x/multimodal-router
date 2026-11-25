@@ -79,6 +79,15 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     assert.ok(graphNodes.nodes.some((node) => node.id === 'AS_RUSSIA' && Array.isArray(node.boxes) && node.boxes.length > 0 && Array.isArray(node.firs) && node.firs.length > 0 && Array.isArray(node.polygons) && node.polygons.length > 0));
     assert.ok(graphNodes.nodes.some((node) => node.id === 'CNSZX' && node.landDegree > 0));
     assert.ok(graphNodes.nodes.every((node) => Number.isFinite(node.lon) && Number.isFinite(node.lat)));
+    const gatewayTypeById = new Map(graphNodes.nodes.map(({ id, gatewayType }) => [id, gatewayType]));
+    for (const [id, gatewayType] of [
+      ['NLRTM', 'water'], ['KZAAU', 'water'], ['PVG', 'air'], ['HKG', 'air'],
+      ['CNALA', 'land'], ['BORDER_SZ_HK', 'land'],
+      ['DAL', undefined], ['DEDUI', undefined], ['CNSZX', undefined],
+    ]) {
+      assert.ok(gatewayTypeById.has(id), id);
+      assert.equal(gatewayTypeById.get(id), gatewayType, id);
+    }
     assert.deepEqual(graphNodes.nodes.filter(({ name_zh }) => !/\p{Script=Han}/u.test(name_zh ?? '')).map(({ id }) => id), []);
 
     for (const q of ['霍尼亚拉国际机场', 'Honiara International Airport', 'HIR']) {

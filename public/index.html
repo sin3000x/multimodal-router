@@ -118,13 +118,19 @@
             <input id="graph-search" type="search" placeholder="搜索节点名称或代码" aria-label="搜索节点名称或代码" />
             <div id="graph-results" class="graph-results hidden" aria-label="节点搜索结果"></div>
           </div>
-          <select id="graph-type" aria-label="节点类型">
-            <option value="">全部类型</option>
+          <select id="graph-type" aria-label="节点筛选">
+            <option value="">全部节点</option>
             <option value="port">港口</option>
             <option value="airport">机场</option>
             <option value="city">城市</option>
-            <option value="land">陆铁枢纽与口岸</option>
+            <option value="land">陆铁枢纽</option>
             <option value="passage">咽喉与空域</option>
+            <optgroup label="口岸">
+              <option value="gateway">全部口岸</option>
+              <option value="gateway-water">水运口岸</option>
+              <option value="gateway-air">航空口岸</option>
+              <option value="gateway-land">陆路口岸</option>
+            </optgroup>
           </select>
           <label><input type="checkbox" id="graph-major-only" /> 仅主要枢纽</label>
           <label><input type="checkbox" id="sea-layer" /> 海运航道</label>
@@ -139,8 +145,9 @@
           <button type="button" class="legend-item graph-legend-btn" data-graph-group="port" aria-pressed="false"><i class="node-dot node-port"></i>港口 <span class="legend-count"></span></button>
           <button type="button" class="legend-item graph-legend-btn" data-graph-group="airport" aria-pressed="false"><i class="node-dot node-airport"></i>机场 <span class="legend-count"></span></button>
           <button type="button" class="legend-item graph-legend-btn" data-graph-group="city" aria-pressed="false"><i class="node-dot node-city"></i>城市 <span class="legend-count"></span></button>
-          <button type="button" class="legend-item graph-legend-btn" data-graph-group="land" aria-pressed="false"><i class="node-dot node-land"></i>陆铁枢纽与口岸 <span class="legend-count"></span></button>
+          <button type="button" class="legend-item graph-legend-btn" data-graph-group="land" aria-pressed="false"><i class="node-dot node-land"></i>陆铁枢纽 <span class="legend-count"></span></button>
           <button type="button" class="legend-item graph-legend-btn" data-graph-group="passage" aria-pressed="false"><i class="node-dot node-passage"></i>咽喉与空域 <span class="legend-count"></span></button>
+          <button type="button" class="legend-item graph-legend-btn" data-graph-group="gateway" aria-pressed="false" title="口岸按图谱数据识别。航空依据跨境航线，水运依据精选、主要港口及跨境渡轮港，陆路依据公路与铁路口岸节点。"><i class="node-dot node-gateway"></i>口岸 <span class="legend-count"></span></button>
         </div>
         <div class="map-stage">
           <div class="map-viewport">

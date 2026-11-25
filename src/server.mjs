@@ -60,6 +60,29 @@ function parseList(val, fallback = []) {
   return String(val).split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+function getGatewayTypes(graph) {
+  const gatewayTypes = new Map();
+  const countryById = new Map();
+  for (const node of graph.nodes) {
+    if (node.type === 'border' || node.type === 'rail_border') {
+      gatewayTypes.set(node.id, 'land');
+    } else if (node.type === 'ferry_port' || (node.type === 'port' && (node.isCuratedPort || node.isHub))) {
+      gatewayTypes.set(node.id, 'water');
+    } else if (node.type === 'airport' || node.type === 'hub_airport') {
+      if (node.country) countryById.set(node.id, node.country);
+    }
+  }
+  for (const [from, to] of graph.airnet?.edges ?? []) {
+    const fromCountry = countryById.get(from);
+    const toCountry = countryById.get(to);
+    if (fromCountry && toCountry && fromCountry !== toCountry) {
+      gatewayTypes.set(from, 'air');
+      gatewayTypes.set(to, 'air');
+    }
+  }
+  return gatewayTypes;
+}
+
 export async function createRouterService({
   graphPath = join(ROOT_DIR, 'data', 'compiled', 'graph.json'),
   manifestPath = join(ROOT_DIR, 'data', 'compiled', 'manifest.json'),
@@ -76,6 +99,7 @@ export async function createRouterService({
   ]);
 
   const router = createRouter(graph);
+  const gatewayTypes = getGatewayTypes(graph);
   const chokepointIndex = precomputed?.chokepointIndex ?? {};
   const landDegreeById = new Map();
   for (const edge of graph.landEdges ?? []) {
@@ -171,6 +195,7 @@ export async function createRouterService({
               code: node.code,
               type: node.type,
               functions: node.functions,
+              gatewayType: gatewayTypes.get(node.id),
               name_zh: node.name_zh,
               name_en: node.name_en,
               country: node.country,

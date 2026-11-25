@@ -405,6 +405,7 @@ body {
 .node-city { background: var(--map-label-text); }
 .node-land { background: var(--rail); }
 .node-passage { background: var(--road); }
+.node-gateway { border: 1.5px solid var(--map-label-text); }
 .map-header {
   display: flex;
   flex: 1;

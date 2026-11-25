@@ -553,6 +553,7 @@ curl 'http://127.0.0.1:4180/v1/graph/nodes'
 | --- | --- | --- |
 | `graphVersion` | `string` | 当前图谱版本。 |
 | `nodes[]` | `object[]` | 节点数组，含 id、code、codeStandard、type、functions[]、name_zh、name_en、country、region、lon、lat、aliases[]、featured、portTier、airportSize、routeCount、isHub、major、hasMarnet、hasRoadnet、landDegree、affectedLaneCount、firs、polygons、boxes 等字段。 |
+| `nodes[].gatewayType` | `string` | 可选的图谱口岸类型。water 为精选或主要海运港及跨境渡轮港，air 为图谱中有跨国家或地区航线的机场，land 为已有的公路和铁路口岸节点。该字段用于图谱识别，覆盖范围以现有数据为准。 |
 
 **返回示例**
 
@@ -569,6 +570,7 @@ curl 'http://127.0.0.1:4180/v1/graph/nodes'
         "port",
         "city"
       ],
+      "gatewayType": "water",
       "name_zh": "鹿特丹港",
       "name_en": "Rotterdam",
       "country": "NL",
