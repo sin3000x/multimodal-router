@@ -428,7 +428,6 @@ body {
   overflow: hidden;
   border-radius: 8px;
 }
-.map-stage.route-card-docked { padding-right: calc(var(--card-width) + 16px); }
 .map-viewport { flex: 1; min-width: 0; position: relative; }
 
 #world-map {

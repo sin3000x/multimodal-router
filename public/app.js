@@ -835,11 +835,7 @@ function drawWorldMap(routes, highlightedId) {
     renderedMarkers.push({ wp, x, y, radius });
     drawWaypointMarker(ctx, wp, x, y, activeColor, wp.id === hoveredWaypointId, isBlocked);
   }
-  if (!positionRouteCard(cssW, cssH, activeColor)) {
-    clampView();
-    drawWorldMap(routes, highlightedId);
-    return;
-  }
+  positionRouteCard(cssW, cssH, activeColor);
   drawRouteWaypointLabels(ctx, tokens, cssW, cssH);
 }
 
@@ -902,57 +898,70 @@ function routeCardAnchor(width, height) {
   return marker ? [marker.x, marker.y] : null;
 }
 
-function routesIntersectBox(x, y, width, height, padding) {
+function countRouteBoxIntersections(x, y, width, height, padding, limit = Infinity) {
   const left = x - padding;
   const right = x + width + padding;
   const top = y - padding;
   const bottom = y + height + padding;
+  let count = 0;
   for (const { points } of renderedLegs) {
     for (let i = 1; i < points.length; i++) {
       const a = points[i - 1];
       const b = points[i];
       if (Math.max(a[0], b[0]) < left || Math.min(a[0], b[0]) > right ||
           Math.max(a[1], b[1]) < top || Math.min(a[1], b[1]) > bottom) continue;
-      if (clipMapSegment(a, b, right - left, bottom - top, left, top)) return true;
+      if (clipMapSegment(a, b, right - left, bottom - top, left, top)) {
+        count += 1;
+        if (count >= limit) return count;
+      }
     }
   }
-  return false;
+  return count;
+}
+
+function routesIntersectBox(x, y, width, height, padding) {
+  return countRouteBoxIntersections(x, y, width, height, padding, 1) > 0;
 }
 
 function positionRouteCard(width, height, color) {
   const card = document.getElementById('map-route-card');
-  const stage = card.parentElement;
-  const docked = stage.classList.contains('route-card-docked');
   const anchor = cardOpen ? routeCardAnchor(width, height) : null;
-  const visible = cardOpen && (anchor || docked);
+  const visible = Boolean(cardOpen && anchor);
   card.classList.toggle('hidden', !visible);
-  if (!visible) return true;
+  if (!visible) return;
 
-  const [x, y] = anchor ?? [width, height / 2];
-  const { offsetWidth: cardWidth, offsetHeight: cardHeight } = card;
+  const [x, y] = anchor;
   const controls = document.querySelector('.map-controls');
   const minX = 8;
   const minY = controls.offsetTop + controls.offsetHeight + 6;
-  const maxX = width - cardWidth - 8;
-  const maxY = height - cardHeight - 8;
+  card.style.maxHeight = `${Math.min(340, Math.max(120, height - minY - 8))}px`;
+
+  const { offsetWidth: cardWidth, offsetHeight: cardHeight } = card;
+  const maxX = Math.max(minX, width - cardWidth - 8);
+  const maxY = Math.max(minY, height - cardHeight - 8);
   const gap = 12;
   const clampX = (value) => Math.max(minX, Math.min(maxX, value));
   const clampY = (value) => Math.max(minY, Math.min(maxY, value));
   const centeredX = clampX(x - cardWidth / 2);
   const centeredY = clampY(y - cardHeight / 2);
-  let position = [width + 10, centeredY];
-  if (!docked) {
-    const candidates = [
-      [x + gap, centeredY], [x - cardWidth - gap, centeredY],
-      [centeredX, y + gap], [centeredX, y - cardHeight - gap],
-      [minX, centeredY], [maxX, centeredY], [centeredX, minY], [centeredX, maxY],
-      [minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY],
-    ];
-    position = candidates.find(([left, top]) => left >= minX && left <= maxX &&
-      top >= minY && top <= maxY && !routesIntersectBox(left, top, cardWidth, cardHeight, 8));
-    if (!position) {
-      stage.classList.add('route-card-docked');
-      return false;
+  const candidates = [
+    [x + gap, centeredY], [x - cardWidth - gap, centeredY],
+    [centeredX, y + gap], [centeredX, y - cardHeight - gap],
+    [minX, centeredY], [maxX, centeredY], [centeredX, minY], [centeredX, maxY],
+    [minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY],
+  ];
+  let position = candidates.find(([left, top]) => left >= minX && left <= maxX &&
+    top >= minY && top <= maxY && !routesIntersectBox(left, top, cardWidth, cardHeight, 8));
+
+  if (!position) {
+    const corners = [[maxX, maxY], [minX, maxY], [maxX, minY], [minX, minY]];
+    let bestCount = Infinity;
+    for (const corner of corners) {
+      const count = countRouteBoxIntersections(corner[0], corner[1], cardWidth, cardHeight, 8);
+      if (count < bestCount) {
+        bestCount = count;
+        position = corner;
+      }
     }
   }
 
@@ -960,7 +969,6 @@ function positionRouteCard(width, height, color) {
   card.style.left = `${cardX + 1}px`;
   card.style.top = `${cardY + 1}px`;
   card.style.setProperty('--route-color', color);
-  return true;
 }
 
 function mapTargetAt(x, y, pointerType) {
@@ -1218,7 +1226,6 @@ function initMapInteractions() {
   };
   document.getElementById('close-route-card').onclick = () => {
     cardOpen = false;
-    stage.classList.remove('route-card-docked');
     resizeMap();
     routeSelect.focus({ preventScroll: true });
   };
@@ -1235,7 +1242,6 @@ function initMapInteractions() {
     const expanded = document.fullscreenElement === panel || panel.classList.contains('map-maximized');
     fullscreen.textContent = expanded ? '退出全屏' : '全屏';
     fullscreen.setAttribute('aria-pressed', String(expanded));
-    stage.classList.remove('route-card-docked');
     resizeMap();
   }
 
@@ -1344,7 +1350,6 @@ function setMapView(nextView) {
   document.getElementById('map-panel').dataset.view = isGraph ? 'graph' : 'routes';
   document.getElementById('graph-view-btn').setAttribute('aria-pressed', String(isGraph));
   document.getElementById('route-view-btn').setAttribute('aria-pressed', String(!isGraph));
-  document.querySelector('.map-stage').classList.remove('route-card-docked');
   document.getElementById('graph-results').classList.add('hidden');
   if (!isGraph && fitRoutesOnReturn) {
     fitRoutesToView(currentRoutes);
@@ -1876,7 +1881,6 @@ function renderRoutes(routes, { initialRouteId = null } = {}) {
   populateRouteSelect(routes);
   renderComparePanel();
 
-  document.querySelector('.map-stage').classList.remove('route-card-docked');
   if (view === routeView) fitRoutesToView(routes);
   else fitRoutesOnReturn = true;
   selectRoute(initialRouteId ?? routes[0]?.routeId ?? null);
