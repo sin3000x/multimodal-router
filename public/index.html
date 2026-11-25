@@ -14,7 +14,7 @@
       <span class="subtitle">全球多式联运路径计算与咽喉绕行评估服务</span>
     </div>
     <div class="topbar-right">
-      <button id="open-api-catalog" class="map-btn map-btn-wide" type="button" aria-haspopup="dialog">API 参数词表</button>
+      <button id="open-api-catalog" class="map-btn map-btn-wide" type="button" aria-haspopup="dialog">API 说明</button>
       <div class="theme-switch" role="group" aria-label="主题切换">
         <button type="button" class="theme-btn" data-theme="light">浅色</button>
         <button type="button" class="theme-btn" data-theme="dark">深色</button>
@@ -246,24 +246,114 @@
 
   <dialog id="api-catalog" class="api-catalog" aria-labelledby="api-catalog-title">
     <header class="api-catalog-header">
-      <h2 id="api-catalog-title">API 参数词表</h2>
+      <div class="api-header-left">
+        <h2 id="api-catalog-title">API 说明</h2>
+        <div class="api-base-pill">
+          <span>Base URL</span>
+          <code id="api-base-url">http://127.0.0.1:4180</code>
+          <button id="api-copy-base" class="map-btn" type="button">复制</button>
+        </div>
+      </div>
+      <div class="segmented api-tabs" role="tablist" aria-label="API 说明分页">
+        <button type="button" class="seg-btn active" role="tab" data-api-tab="docs" aria-selected="true" aria-controls="api-panel-docs">接口文档</button>
+        <button type="button" class="seg-btn" role="tab" data-api-tab="dict" aria-selected="false" aria-controls="api-panel-dict">参数词表</button>
+        <button type="button" class="seg-btn" role="tab" data-api-tab="guide" aria-selected="false" aria-controls="api-panel-guide">接入规范</button>
+      </div>
       <form method="dialog">
         <button class="map-btn map-btn-wide" type="submit">关闭</button>
       </form>
     </header>
-    <div class="api-catalog-body">
-      <section class="api-lookup" aria-labelledby="api-lookup-title">
-        <h3 id="api-lookup-title">查询参数值</h3>
+
+    <div class="api-catalog-content">
+      <section id="api-panel-docs" class="api-panel api-docs-layout" role="tabpanel" data-api-panel="docs">
+        <nav id="api-nav" class="api-nav" aria-label="接口目录"></nav>
+        <div class="api-doc-detail">
+          <div class="api-doc-hero">
+            <div class="api-doc-title-row">
+              <span id="api-doc-method" class="api-method api-method-post">POST</span>
+              <code id="api-doc-path" class="api-doc-path">/v1/routes</code>
+              <strong id="api-doc-title" class="api-doc-title">路径计算</strong>
+              <div id="api-method-switch" class="segmented api-method-switch" role="group" aria-label="HTTP 方法切换" hidden></div>
+            </div>
+            <p id="api-doc-summary" class="api-doc-summary"></p>
+            <div id="api-doc-note" class="api-doc-note" hidden></div>
+          </div>
+
+          <section class="api-doc-section" aria-labelledby="api-sec-params">
+            <h3 id="api-sec-params">请求参数</h3>
+            <div id="api-doc-params"></div>
+          </section>
+
+          <section class="api-doc-section" aria-labelledby="api-sec-try">
+            <div class="api-section-head">
+              <h3 id="api-sec-try">请求示例与在线试调</h3>
+              <button id="api-jump-dict" class="link-btn" type="button">从词表选值 →</button>
+            </div>
+            <div id="api-node-search-controls" class="api-node-search-controls" hidden>
+              <label>关键词 <input id="api-ns-q" type="search" value="深圳" placeholder="节点名称或代码" /></label>
+              <label>类型
+                <select id="api-ns-type">
+                  <option value="">全部</option>
+                  <option value="city">city</option>
+                  <option value="port">port</option>
+                  <option value="airport">airport</option>
+                  <option value="rail_hub">rail_hub</option>
+                  <option value="rail_border">rail_border</option>
+                  <option value="chokepoint">chokepoint</option>
+                  <option value="airspace">airspace</option>
+                </select>
+              </label>
+              <label class="api-check-inline"><input id="api-ns-endpoint" type="checkbox" checked /> endpoint=1</label>
+              <label>条数 <input id="api-ns-limit" type="number" min="1" max="100" value="10" /></label>
+            </div>
+            <div id="api-req-url-wrap" class="api-req-url-wrap">
+              <span class="api-req-label">请求地址</span>
+              <code id="api-req-url"></code>
+            </div>
+            <textarea id="api-payload" aria-label="JSON 请求体" spellcheck="false"></textarea>
+            <div class="api-tools api-try-toolbar">
+              <button id="api-try-btn" class="primary-btn api-try-btn" type="button">发起试调</button>
+              <button id="api-copy-curl" class="map-btn map-btn-wide" type="button">复制 cURL</button>
+              <button id="api-copy-json" class="map-btn map-btn-wide" type="button">复制 JSON</button>
+              <button id="api-reset-example" class="map-btn map-btn-wide" type="button">同步页面参数</button>
+              <span id="api-copy-status" role="status"></span>
+            </div>
+            <div id="api-live-box" class="api-live-box" hidden>
+              <div class="api-live-head">
+                <span id="api-live-status" class="status-badge"></span>
+                <span id="api-live-meta" class="api-live-meta"></span>
+                <div class="api-live-actions">
+                  <button id="api-copy-response" class="map-btn" type="button">复制响应</button>
+                  <button id="api-clear-response" class="map-btn" type="button">清空</button>
+                </div>
+              </div>
+              <pre id="api-live-output" class="api-code-block"></pre>
+            </div>
+          </section>
+
+          <section class="api-doc-section" aria-labelledby="api-sec-resp">
+            <h3 id="api-sec-resp">响应字段</h3>
+            <div id="api-doc-response-fields"></div>
+            <details id="api-doc-sample-wrap" class="api-sample-details">
+              <summary>查看返回示例 JSON</summary>
+              <pre id="api-doc-sample" class="api-code-block"></pre>
+            </details>
+          </section>
+        </div>
+      </section>
+
+      <section id="api-panel-dict" class="api-panel api-dict-panel" role="tabpanel" data-api-panel="dict" hidden>
+        <div id="api-dict-selection" class="api-dict-selection"></div>
         <div class="api-tools">
           <select id="api-dictionary" aria-label="词表">
             <option value="nodes">起终点节点（from / to）</option>
             <option value="avoid">咽喉与空域（avoid）</option>
           </select>
-          <input id="api-search" type="search" placeholder="中文名、英文名或编码" aria-label="搜索词表" autofocus />
+          <input id="api-search" type="search" placeholder="中文名、英文名、UN/LOCODE、IATA 或别名" aria-label="搜索词表" />
         </div>
         <div class="api-table-wrap">
           <table class="api-table" aria-label="可用参数值">
-            <thead><tr><th scope="col">名称</th><th scope="col">参数值</th><th scope="col">填入示例</th></tr></thead>
+            <thead><tr><th scope="col">名称</th><th scope="col">参数值（点击复制）</th><th scope="col">填入示例</th></tr></thead>
             <tbody id="api-values"></tbody>
           </table>
         </div>
@@ -279,28 +369,9 @@
           <button id="api-next" class="map-btn map-btn-wide" type="button">下一页</button>
         </div>
       </section>
-      <section class="api-request" aria-labelledby="api-request-title">
-        <h3 id="api-request-title">POST 请求示例</h3>
-        <select id="api-endpoint" aria-label="POST 接口">
-          <option value="/v1/routes">/v1/routes · 路径计算</option>
-          <option value="/v1/routes/compare">/v1/routes/compare · 绕行对比</option>
-          <option value="/v1/precompute">/v1/precompute · 批量预热</option>
-        </select>
-        <textarea id="api-payload" aria-label="JSON 请求体" readonly spellcheck="false"></textarea>
-        <div class="api-tools">
-          <button id="api-copy-json" class="map-btn map-btn-wide" type="button">复制 JSON</button>
-          <button id="api-copy-curl" class="map-btn map-btn-wide" type="button">复制 cURL</button>
-          <span id="api-copy-status" role="status"></span>
-        </div>
-        <dl class="api-fields">
-          <div data-api-route><dt><code>from</code> / <code>to</code></dt><dd>必填。优先使用词表中的节点 ID。接口也接受可识别的名称、别名和坐标（<code>"经度,纬度"</code> 或 <code>{lon, lat}</code>）。</dd></div>
-          <div data-api-route><dt><code>avoid</code></dt><dd>可选。咽喉与空域 ID 数组，默认 <code>[]</code>。</dd></div>
-          <div data-api-precompute hidden><dt><code>pairs</code></dt><dd>可选。<code>{from, to}</code> 起终点对象数组，省略或为空时使用预置起终点。每对起终点可指定自己的 <code>modes</code> 或 <code>avoid</code>。</dd></div>
-          <div data-api-precompute hidden><dt><code>avoidScenarios</code></dt><dd>可选。每项为一组咽喉与空域 ID，默认为 <code>[[]]</code>。</dd></div>
-          <div><dt><code>modes</code></dt><dd>可选。<code>sea</code> 海运、<code>air</code> 空运、<code>rail</code> 铁路、<code>road</code> 公路。数组，默认全部。</dd></div>
-          <div><dt><code>maxRoutes</code></dt><dd>可选。每组返回路径数上限，范围 1–24，默认 8。绕行对比每组最多计算 12 条。</dd></div>
-          <div><dt><code>includeGeometry</code></dt><dd>可选。布尔值，控制路径结果是否包含几何坐标。预热默认 <code>true</code>，其他接口默认 <code>false</code>。</dd></div>
-        </dl>
+
+      <section id="api-panel-guide" class="api-panel api-guide-panel" role="tabpanel" data-api-panel="guide" hidden>
+        <div id="api-guide-grid" class="api-guide-grid"></div>
       </section>
     </div>
   </dialog>

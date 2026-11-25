@@ -10,6 +10,7 @@
     "fetch:data": "node scripts/fetch-datasets.mjs",
     "build:graph": "node scripts/build-graph.mjs",
     "precompute": "node scripts/precompute.mjs",
+    "docs:api": "node scripts/generate-api-docs.mjs",
     "start": "node src/server.mjs",
     "service:start": "bash scripts/service.sh start",
     "service:stop": "bash scripts/service.sh stop",

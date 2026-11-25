@@ -66,10 +66,14 @@ npm run service:logs     # 查看最近日志
 
 ## HTTP API
 
-首页顶部的「API 参数词表」支持查询起终点节点 ID、咽喉与空域 ID，并按接口复制 JSON 请求体或完整 cURL 命令。
+完整接口参数、响应字段与接入规范请查看 [docs/API.md](docs/API.md)（由 [public/api-docs-data.js](public/api-docs-data.js) 通过 `npm run docs:api` 自动生成，与前端「API 说明」弹窗共用同一数据源并保持同步）。
+
+首页顶部的「API 说明」提供全部 HTTP 接口的请求/响应字段文档、在线试调（Try-it-out）、JSON/cURL 复制、可搜索参数词表以及编码/缓存/状态码接入规范。
 
 - `GET /health` — 服务健康状态、图谱版本、构建统计与缓存命中率
 - `GET /v1/nodes?q=...&type=...&limit=...` — 节点搜索与自动补全
+- `GET /v1/graph/nodes` — 全量带坐标图谱节点列表
+- `GET /v1/graph/links` — 全量海运航段与陆铁走廊坐标连线
 - `GET /v1/chokepoints` — 规范咽喉与空域列表（附带预计算受影响线路数）
 - `GET / POST /v1/routes` — 多式联运多路径计算（参数：`from`, `to`, `modes`, `avoid`, `maxRoutes`, `includeGeometry`）
 - `GET / POST /v1/routes/compare` — 基线 vs 咽喉受阻对比分析（返回 `affected`, `alternatives`, `landSubstitutions`, `impactSummary` 及 `deltaDays` / `costMultiplier`）
