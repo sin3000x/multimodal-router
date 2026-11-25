@@ -14,6 +14,7 @@
       <span class="subtitle">全球多式联运路径计算与咽喉绕行评估服务</span>
     </div>
     <div class="topbar-right">
+      <button id="open-api-catalog" class="map-btn map-btn-wide" type="button" aria-haspopup="dialog">API 参数词表</button>
       <div class="theme-switch" role="group" aria-label="主题切换">
         <button type="button" class="theme-btn" data-theme="light">浅色</button>
         <button type="button" class="theme-btn" data-theme="dark">深色</button>
@@ -242,6 +243,67 @@
       </div>
     </section>
   </main>
+
+  <dialog id="api-catalog" class="api-catalog" aria-labelledby="api-catalog-title">
+    <header class="api-catalog-header">
+      <h2 id="api-catalog-title">API 参数词表</h2>
+      <form method="dialog">
+        <button class="map-btn map-btn-wide" type="submit">关闭</button>
+      </form>
+    </header>
+    <div class="api-catalog-body">
+      <section class="api-lookup" aria-labelledby="api-lookup-title">
+        <h3 id="api-lookup-title">查询参数值</h3>
+        <div class="api-tools">
+          <select id="api-dictionary" aria-label="词表">
+            <option value="nodes">起终点节点（from / to）</option>
+            <option value="avoid">咽喉与空域（avoid）</option>
+          </select>
+          <input id="api-search" type="search" placeholder="中文名、英文名或编码" aria-label="搜索词表" autofocus />
+        </div>
+        <div class="api-table-wrap">
+          <table class="api-table" aria-label="可用参数值">
+            <thead><tr><th scope="col">名称</th><th scope="col">参数值</th><th scope="col">填入示例</th></tr></thead>
+            <tbody id="api-values"></tbody>
+          </table>
+        </div>
+        <div class="api-tools api-pagination">
+          <span id="api-result-count" role="status"></span>
+          <label for="api-page-size">每页</label>
+          <select id="api-page-size">
+            <option value="20">20 条</option>
+            <option value="50">50 条</option>
+            <option value="100">100 条</option>
+          </select>
+          <button id="api-prev" class="map-btn map-btn-wide" type="button">上一页</button>
+          <button id="api-next" class="map-btn map-btn-wide" type="button">下一页</button>
+        </div>
+      </section>
+      <section class="api-request" aria-labelledby="api-request-title">
+        <h3 id="api-request-title">POST 请求示例</h3>
+        <select id="api-endpoint" aria-label="POST 接口">
+          <option value="/v1/routes">/v1/routes · 路径计算</option>
+          <option value="/v1/routes/compare">/v1/routes/compare · 绕行对比</option>
+          <option value="/v1/precompute">/v1/precompute · 批量预热</option>
+        </select>
+        <textarea id="api-payload" aria-label="JSON 请求体" readonly spellcheck="false"></textarea>
+        <div class="api-tools">
+          <button id="api-copy-json" class="map-btn map-btn-wide" type="button">复制 JSON</button>
+          <button id="api-copy-curl" class="map-btn map-btn-wide" type="button">复制 cURL</button>
+          <span id="api-copy-status" role="status"></span>
+        </div>
+        <dl class="api-fields">
+          <div data-api-route><dt><code>from</code> / <code>to</code></dt><dd>必填。优先使用词表中的节点 ID。接口也接受可识别的名称、别名和坐标（<code>"经度,纬度"</code> 或 <code>{lon, lat}</code>）。</dd></div>
+          <div data-api-route><dt><code>avoid</code></dt><dd>可选。咽喉与空域 ID 数组，默认 <code>[]</code>。</dd></div>
+          <div data-api-precompute hidden><dt><code>pairs</code></dt><dd>可选。<code>{from, to}</code> 起终点对象数组，省略或为空时使用预置起终点。每对起终点可指定自己的 <code>modes</code> 或 <code>avoid</code>。</dd></div>
+          <div data-api-precompute hidden><dt><code>avoidScenarios</code></dt><dd>可选。每项为一组咽喉与空域 ID，默认为 <code>[[]]</code>。</dd></div>
+          <div><dt><code>modes</code></dt><dd>可选。<code>sea</code> 海运、<code>air</code> 空运、<code>rail</code> 铁路、<code>road</code> 公路。数组，默认全部。</dd></div>
+          <div><dt><code>maxRoutes</code></dt><dd>可选。每组返回路径数上限，范围 1–24，默认 8。绕行对比每组最多计算 12 条。</dd></div>
+          <div><dt><code>includeGeometry</code></dt><dd>可选。布尔值，控制路径结果是否包含几何坐标。预热默认 <code>true</code>，其他接口默认 <code>false</code>。</dd></div>
+        </dl>
+      </section>
+    </div>
+  </dialog>
 
   <script type="module" src="/app.js"></script>
 </body>

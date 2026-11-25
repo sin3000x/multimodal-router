@@ -1,4 +1,5 @@
 import { createEndpointPicker } from './endpoint-picker.js';
+import { initApiCatalog } from './api-catalog.js';
 import {
   buildCompareModel,
   COMPARE_ROLE_META,
@@ -1899,10 +1900,21 @@ function updateActionButton() {
   }
 }
 
+function getRoutePayload() {
+  return {
+    from: endpointPickers.from.value,
+    to: endpointPickers.to.value,
+    modes: selectedModes(),
+    avoid: selectedAvoid(),
+    maxRoutes: 8,
+    includeGeometry: true,
+  };
+}
+
 async function runQuery() {
   setMapView(routeView);
-  const from = endpointPickers.from.value;
-  const to = endpointPickers.to.value;
+  const payload = getRoutePayload();
+  const { from, to, avoid } = payload;
   const summary = document.getElementById('route-summary');
   for (const picker of Object.values(endpointPickers)) picker.close();
   if (!from || !to) {
@@ -1910,8 +1922,6 @@ async function runQuery() {
     document.getElementById(`${!from ? 'from' : 'to'}-input`).focus();
     return;
   }
-  const modes = selectedModes();
-  const avoid = selectedAvoid();
   const isCompare = avoid.length > 0;
 
   const endpoint = isCompare ? '/v1/routes/compare' : '/v1/routes';
@@ -1920,7 +1930,7 @@ async function runQuery() {
     data = await fetchJson(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ from, to, modes, avoid, maxRoutes: 8, includeGeometry: true }),
+      body: JSON.stringify(payload),
     });
   } catch (error) {
     if (error.message.startsWith('Unknown origin node:')) {
@@ -2043,6 +2053,8 @@ const endpointPickers = Object.fromEntries(['from', 'to'].map((key) => [
     submit: () => runQuery(),
   }),
 ]));
+
+initApiCatalog({ fetchJson, getRoutePayload, nodeGroups, groupLabels: NODE_GROUPS });
 
 init().catch((err) => {
   console.error(err);

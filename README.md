@@ -66,6 +66,8 @@ npm run service:logs     # 查看最近日志
 
 ## HTTP API
 
+首页顶部的「API 参数词表」支持查询起终点节点 ID、咽喉与空域 ID，并按接口复制 JSON 请求体或完整 cURL 命令。
+
 - `GET /health` — 服务健康状态、图谱版本、构建统计与缓存命中率
 - `GET /v1/nodes?q=...&type=...&limit=...` — 节点搜索与自动补全
 - `GET /v1/chokepoints` — 规范咽喉与空域列表（附带预计算受影响线路数）
