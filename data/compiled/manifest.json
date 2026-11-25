@@ -1,6 +1,6 @@
 {
-  "graphVersion": "ee52afcbd361",
-  "builtAt": "2026-11-25T06:20:19.205Z",
+  "graphVersion": "2b415c91c971",
+  "builtAt": "2026-11-25T06:45:48.747Z",
   "sources": {
     "marnet_searoute": {
       "bytes": 746451,
@@ -17,6 +17,10 @@
     "ne_10m_roads": {
       "bytes": 50474096,
       "mtime": "2026-11-25T06:19:41.714Z"
+    },
+    "airline_routes": {
+      "bytes": 22950294,
+      "mtime": "2026-11-25T06:44:16.304Z"
     }
   },
   "counts": {
@@ -40,6 +44,7 @@
       348,
       280
     ],
+    "airnetEdges": 28323,
     "landEdges": 83,
     "publicPortsLoaded": 3961,
     "publicPortsSnapped": 3464,

@@ -184,7 +184,8 @@
       "lat": 28.0,
       "region": "middleEast",
       "boxes": [
-        { "minLon": 34.5, "maxLon": 62.0, "minLat": 14.0, "maxLat": 36.8 }
+        { "minLon": 34.5, "maxLon": 61.5, "minLat": 29.5, "maxLat": 37.5 },
+        { "minLon": 42.5, "maxLon": 53.0, "minLat": 12.5, "maxLat": 18.5 }
       ],
       "aliases": ["Middle East airspace", "Gulf airspace"]
     }

@@ -65,6 +65,10 @@ export function estimateLegMetrics(
   leg,
   {
     isTransfer = false,
+    isTechStop = false,
+    thinRoute = false,
+    airwayDetourDays = 0,
+    airwayDetourCost = 0,
     isRemoteAlternate = false,
     isSecondaryPort = false,
     originPortTier = 1,
@@ -112,15 +116,30 @@ export function estimateLegMetrics(
     };
   }
 
-  let dwellDays = isTransfer && profile.transferDwellDays != null
-    ? profile.transferDwellDays
+  let dwellDays = isTransfer
+    ? isTechStop
+      ? 0.18
+      : profile.transferDwellDays ?? profile.fixedDwellDays
     : profile.fixedDwellDays;
 
   if (mode === 'rail' && leg.hasFerry) {
     dwellDays += 0.8; // Caspian Sea Ro-Ro ferry transfer overhead
   }
 
-  let baseCost = isTransfer && profile.transferCost != null ? profile.transferCost : profile.baseCost;
+  let baseCost = isTransfer
+    ? isTechStop
+      ? 0.9
+      : profile.transferCost ?? profile.baseCost
+    : profile.baseCost;
+
+  if (mode === 'air') {
+    if (thinRoute) {
+      dwellDays += 0.3;
+      baseCost += 0.45;
+    }
+    dwellDays += airwayDetourDays;
+    baseCost += airwayDetourCost;
+  }
 
   if (mode === 'sea') {
     const dTier = destPortTier ?? (isSecondaryPort ? 3 : 1);

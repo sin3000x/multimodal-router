@@ -318,3 +318,38 @@ test('Global roadnet routes overland around Bohai Bay for Weihai -> Dalian (CNWE
   assert.equal(crossesOpenSea(geom[0], geom[geom.length - 1]), true);
   assert.ok(geom.some(([lon, lat]) => lon < 118.5 && lat > 38.8), 'should detour west/north around Bohai Bay');
 });
+
+test('Real airnet prevents fake intercontinental non-stops, avoids Ukraine by default, and models ANC tech-stop & corridor detours', () => {
+  // No fake non-stop to Entebbe (Uganda) or Bogota (Colombia)
+  const klaAir = router.findRoutes({ from: 'CNSZX', to: 'UGKLA', modes: ['air'], maxRoutes: 6 }).routes;
+  assert.ok(klaAir.length >= 1);
+  assert.ok(klaAir.every((r) => r.legs.filter((l) => l.mode === 'air').length >= 2), 'CNSZX -> UGKLA should require transfer');
+  assert.ok(klaAir.some((r) => ['DXB', 'ADD', 'DOH', 'RUH'].includes(r.viaHub?.id)));
+
+  const bogAir = router.findRoutes({ from: 'CNSZX', to: 'COBOG', modes: ['air'], maxRoutes: 6 }).routes;
+  assert.ok(bogAir.length >= 1);
+  assert.ok(bogAir.every((r) => r.legs.filter((l) => l.mode === 'air').length >= 2), 'CNSZX -> COBOG should require transfer');
+
+  // Real non-stop preserved for CNSZX -> NLAMS and avoids Ukraine conflict box by default
+  const amsAir = router.findRoutes({ from: 'CNSZX', to: 'NLAMS', modes: ['air'], includeGeometry: true, maxRoutes: 6 }).routes;
+  assert.ok(amsAir.some((r) => r.legs.filter((l) => l.mode === 'air').length === 1));
+  const ukraineBox = (lon, lat) => lon >= 23.0 && lon <= 40.0 && lat >= 45.2 && lat <= 52.0;
+  for (const leg of amsAir[0].legs.filter((l) => l.mode === 'air')) {
+    assert.ok(!leg.geometry.some(([lon, lat]) => ukraineBox(lon, lat)), 'baseline air should avoid Ukraine conflict zone');
+  }
+
+  // AS_RUSSIA avoidance produces in-flight corridor detour with higher distance/days
+  const amsAvoidRu = router.findRoutes({ from: 'CNSZX', to: 'NLAMS', modes: ['air'], avoid: ['AS_RUSSIA'], maxRoutes: 6 }).routes;
+  assert.ok(amsAvoidRu.length >= 1);
+  assert.ok(amsAvoidRu.every((r) => !r.chokepoints.some((c) => c.id === 'AS_RUSSIA')));
+  assert.ok(amsAvoidRu[0].metrics.distanceKm > amsAir[0].metrics.distanceKm);
+
+  // Refined AS_MIDEAST still allows routing via southern Arabian-Red Sea corridor to Cairo
+  const caiAvoidMe = router.findRoutes({ from: 'CNSZX', to: 'EGCAI', modes: ['air'], avoid: ['AS_MIDEAST'], maxRoutes: 6 }).routes;
+  assert.ok(caiAvoidMe.length >= 1);
+  assert.ok(caiAvoidMe.every((r) => !r.chokepoints.some((c) => c.id === 'AS_MIDEAST')));
+
+  // SZX -> ORD includes ANC refueling tech-stop
+  const ordAir = router.findRoutes({ from: 'SZX', to: 'ORD', modes: ['air'], maxRoutes: 6 }).routes;
+  assert.ok(ordAir.some((r) => r.viaHub?.id === 'ANC'), 'SZX -> ORD should include Anchorage tech-stop');
+});

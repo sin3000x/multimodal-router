@@ -14,10 +14,31 @@ const PUBLIC_DIR = join(ROOT_DIR, 'public');
 const COMPILED_DIR = join(ROOT_DIR, 'data', 'compiled');
 
 const MAJOR_AIR_CARGO_HUBS = new Set([
-  'HKG', 'PVG', 'CAN', 'SZX', 'ICN', 'NRT', 'SIN', 'DXB', 'DOH', 'IST',
-  'FRA', 'AMS', 'LHR', 'CDG', 'LGG', 'ANC', 'LAX', 'MIA', 'ORD', 'MEM',
-  'ADD', 'JNB', 'GRU', 'MEX', 'RUH',
+  'HKG', 'PVG', 'CAN', 'SZX', 'EHU', 'ICN', 'NRT', 'TPE', 'SIN', 'BKK', 'DEL',
+  'DXB', 'DWC', 'DOH', 'RUH', 'IST', 'FRA', 'AMS', 'LHR', 'CDG', 'LGG', 'LUX',
+  'LEJ', 'MXP', 'MAD', 'ANC', 'LAX', 'ORD', 'JFK', 'MIA', 'MEM', 'CVG', 'SDF',
+  'ADD', 'NBO', 'JNB', 'CAI', 'GRU', 'BOG', 'SCL', 'MEX',
 ]);
+
+const CARGO_FREIGHTER_LINKS = [
+  // Asia <-> Europe dedicated freighter trunks
+  ['SZX', 'AMS'], ['SZX', 'FRA'], ['SZX', 'LGG'], ['SZX', 'LHR'],
+  ['HKG', 'AMS'], ['HKG', 'FRA'], ['HKG', 'LGG'], ['HKG', 'LUX'], ['HKG', 'LHR'],
+  ['PVG', 'AMS'], ['PVG', 'FRA'], ['PVG', 'LGG'], ['PVG', 'LUX'],
+  ['CAN', 'AMS'], ['CAN', 'FRA'],
+  // Asia <-> Anchorage (ANC) <-> Americas freighter trunks
+  ['HKG', 'ANC'], ['PVG', 'ANC'], ['SZX', 'ANC'], ['CAN', 'ANC'],
+  ['ICN', 'ANC'], ['NRT', 'ANC'], ['TPE', 'ANC'],
+  ['ANC', 'ORD'], ['ANC', 'LAX'], ['ANC', 'JFK'], ['ANC', 'MIA'],
+  ['ANC', 'MEM'], ['ANC', 'CVG'], ['ANC', 'MEX'],
+  ['MIA', 'BOG'], ['MIA', 'GRU'], ['MIA', 'SCL'], ['MIA', 'LIM'],
+  // Asia <-> Middle East <-> Africa/Europe freighter trunks
+  ['SZX', 'DXB'], ['SZX', 'DOH'], ['SZX', 'RUH'],
+  ['HKG', 'DXB'], ['HKG', 'DOH'], ['PVG', 'DXB'], ['PVG', 'DOH'], ['CAN', 'DXB'],
+  ['DXB', 'AMS'], ['DXB', 'FRA'], ['DXB', 'LGG'], ['DXB', 'ADD'], ['DXB', 'NBO'], ['DXB', 'JNB'],
+  ['DOH', 'AMS'], ['DOH', 'FRA'], ['DOH', 'LGG'], ['DOH', 'ADD'], ['DOH', 'JNB'],
+  ['ADD', 'EBB'], ['ADD', 'NBO'], ['ADD', 'JNB'], ['ADD', 'LUN'], ['ADD', 'LOS'],
+];
 
 const TIER1_SEA_HUB_CODES = new Set([
   'CNYTN', 'CNSHK', 'CNNSA', 'CNYAN', 'CNZOS', 'CNXIP', 'HKHKG', 'SGSIN',
@@ -625,13 +646,68 @@ function canonicalizeSeedNode(seed) {
   return { id: legacyId, code: seed.code ?? null, codeStandard: 'custom', legacyId };
 }
 
+function buildAirnet(airlineRoutesRaw, nodesById) {
+  const isAirport = (id) => {
+    const n = nodesById.get(id);
+    return Boolean(n && (n.type === 'airport' || n.type === 'hub_airport'));
+  };
+  const edgeMap = new Map();
+  const degree = new Map();
+
+  for (const [rawFrom, entry] of Object.entries(airlineRoutesRaw ?? {})) {
+    const from = rawFrom.trim().toUpperCase();
+    if (!isAirport(from)) continue;
+    for (const r of entry?.routes ?? []) {
+      const to = String(r?.iata ?? '').trim().toUpperCase();
+      if (!to || to === from || !isAirport(to)) continue;
+      const key = from < to ? `${from}:${to}` : `${to}:${from}`;
+      const carriers = Math.max(1, r.carriers?.length || 1);
+      const prev = edgeMap.get(key);
+      if (!prev) {
+        edgeMap.set(key, { u: from < to ? from : to, v: from < to ? to : from, carriers, freighter: 0 });
+      } else if (carriers > prev.carriers) {
+        prev.carriers = carriers;
+      }
+    }
+  }
+
+  for (const [rawA, rawB] of CARGO_FREIGHTER_LINKS) {
+    const a = rawA.toUpperCase();
+    const b = rawB.toUpperCase();
+    if (a === b || !isAirport(a) || !isAirport(b)) continue;
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    const prev = edgeMap.get(key);
+    if (!prev) {
+      edgeMap.set(key, { u: a < b ? a : b, v: a < b ? b : a, carriers: 3, freighter: 1 });
+    } else {
+      prev.freighter = 1;
+      prev.carriers = Math.max(prev.carriers, 3);
+    }
+  }
+
+  const edges = [];
+  for (const e of edgeMap.values()) {
+    edges.push([e.u, e.v, e.carriers, e.freighter]);
+    degree.set(e.u, (degree.get(e.u) || 0) + 1);
+    degree.set(e.v, (degree.get(e.v) || 0) + 1);
+  }
+
+  for (const [id, deg] of degree.entries()) {
+    const n = nodesById.get(id);
+    if (n) n.routeCount = deg;
+  }
+
+  return { edges };
+}
+
 async function main() {
-  const [marnetRaw, portsRaw, airportsCsv, roadsRaw, countriesRaw, chokepointsCfg, corridorsCfg, seedNodes] =
+  const [marnetRaw, portsRaw, airportsCsv, roadsRaw, airlineRoutesRaw, countriesRaw, chokepointsCfg, corridorsCfg, seedNodes] =
     await Promise.all([
       readFile(join(RAW_DIR, 'marnet_searoute.geojson'), 'utf8').then(JSON.parse),
       readFile(join(RAW_DIR, 'ports.geojson'), 'utf8').then(JSON.parse),
       readFile(join(RAW_DIR, 'airports.csv'), 'utf8'),
       readFile(join(RAW_DIR, 'ne_10m_roads.geojson'), 'utf8').then(JSON.parse),
+      readFile(join(RAW_DIR, 'airline_routes.json'), 'utf8').then(JSON.parse),
       readFile(join(PUBLIC_DIR, 'countries.geojson'), 'utf8').then(JSON.parse),
       readFile(join(CURATED_DIR, 'chokepoints.json'), 'utf8').then(JSON.parse),
       readFile(join(CURATED_DIR, 'rail-land-corridors.json'), 'utf8').then(JSON.parse),
@@ -926,6 +1002,8 @@ async function main() {
     });
   }
 
+  const airnet = buildAirnet(airlineRoutesRaw, nodesById);
+
   const nodes = [...nodesById.values()];
   const missingChineseNames = [];
   for (const node of nodes) {
@@ -964,17 +1042,21 @@ async function main() {
       vertices: roadnet.vertices,
       edges: roadnet.edges,
     },
+    airnet: {
+      edges: airnet.edges,
+    },
     landEdges,
   };
 
   const payloadJson = JSON.stringify(payload);
   const graphVersion = createHash('sha256').update(payloadJson).digest('hex').slice(0, 12);
 
-  const [marnetStat, portsStat, airportsStat, roadsStat] = await Promise.all([
+  const [marnetStat, portsStat, airportsStat, roadsStat, airRoutesStat] = await Promise.all([
     stat(join(RAW_DIR, 'marnet_searoute.geojson')),
     stat(join(RAW_DIR, 'ports.geojson')),
     stat(join(RAW_DIR, 'airports.csv')),
     stat(join(RAW_DIR, 'ne_10m_roads.geojson')),
+    stat(join(RAW_DIR, 'airline_routes.json')),
   ]);
 
   const counts = {
@@ -990,6 +1072,7 @@ async function main() {
     roadnetVertices: roadnet.vertices.length,
     roadnetEdges: roadnet.edges.length,
     roadnetComponents: roadnet.componentSizes.slice(0, 5),
+    airnetEdges: airnet.edges.length,
     landEdges: landEdges.length,
     publicPortsLoaded,
     publicPortsSnapped,
@@ -1009,6 +1092,7 @@ async function main() {
       ports: { bytes: portsStat.size, mtime: portsStat.mtime.toISOString() },
       airports: { bytes: airportsStat.size, mtime: airportsStat.mtime.toISOString() },
       ne_10m_roads: { bytes: roadsStat.size, mtime: roadsStat.mtime.toISOString() },
+      airline_routes: { bytes: airRoutesStat.size, mtime: airRoutesStat.mtime.toISOString() },
     },
     counts,
   };

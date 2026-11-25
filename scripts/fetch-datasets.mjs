@@ -29,6 +29,11 @@ const DATASETS = [
     url: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_roads.geojson',
     description: 'Natural Earth 1:10m global highway network',
   },
+  {
+    name: 'airline_routes.json',
+    url: 'https://raw.githubusercontent.com/Jonty/airline-route-data/main/airline_routes.json',
+    description: 'Global scheduled airline route network indexed by IATA code',
+  },
 ];
 
 async function existsNonEmpty(filePath) {
