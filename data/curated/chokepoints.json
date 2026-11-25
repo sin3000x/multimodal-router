@@ -170,6 +170,7 @@
       "lon": 50.0,
       "lat": 58.0,
       "region": "europe",
+      "firs": ["UEEE", "UHHH", "UHMM", "UIII", "ULLL", "UMKK", "UNKL", "UNNT", "URRV", "USSV", "USTV", "UUWV", "UWWW"],
       "boxes": [
         { "minLon": 28.0, "maxLon": 179.9, "minLat": 50.5, "maxLat": 78.0 }
       ],
@@ -178,16 +179,39 @@
     {
       "id": "AS_MIDEAST",
       "type": "airspace",
-      "name_zh": "中东空域",
-      "name_en": "Middle East airspace",
-      "lon": 46.0,
-      "lat": 28.0,
+      "name_zh": "中东冲突空域",
+      "name_en": "Middle East conflict airspace",
+      "lon": 48.0,
+      "lat": 32.5,
       "region": "middleEast",
+      "firs": ["OIIX", "ORBB", "OSTT", "OLBB", "LLLL", "OYSC"],
       "boxes": [
         { "minLon": 34.5, "maxLon": 61.5, "minLat": 29.5, "maxLat": 37.5 },
         { "minLon": 42.5, "maxLon": 53.0, "minLat": 12.5, "maxLat": 18.5 }
       ],
-      "aliases": ["Middle East airspace", "Gulf airspace"]
+      "aliases": ["Middle East airspace", "Middle East conflict airspace", "中东空域"]
+    },
+    {
+      "id": "AS_GULF",
+      "type": "airspace",
+      "name_zh": "海湾与沙特空域",
+      "name_en": "Gulf & Saudi airspace",
+      "lon": 46.5,
+      "lat": 24.0,
+      "region": "middleEast",
+      "firs": ["OEJD", "OMAE", "OOMM", "OTDF", "OBBB", "OKAC", "OJAC"],
+      "boxes": [
+        { "minLon": 34.5, "maxLon": 60.0, "minLat": 16.0, "maxLat": 32.5 }
+      ],
+      "aliases": ["Gulf airspace", "Saudi airspace", "Arabian Peninsula airspace", "沙特空域", "海湾空域"]
+    }
+  ],
+  "defaultClosedAirspaces": [
+    {
+      "id": "AS_UKRAINE",
+      "name_zh": "乌克兰空域（默认禁飞）",
+      "name_en": "Ukraine airspace (closed)",
+      "firs": ["UKBV", "UKDV", "UKFV", "UKLV", "UKOV"]
     }
   ]
 }

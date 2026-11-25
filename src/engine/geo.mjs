@@ -84,6 +84,80 @@ export function greatCircleIntersectsBoxes(a, b, boxes = []) {
   return pts.some((pt) => boxes.some((box) => pointInBox(pt, box)));
 }
 
+/** Unwrap consecutive longitudes in a polygon ring so antimeridian-crossing rings stay continuous. */
+export function unwrapRingLons(ring) {
+  if (!Array.isArray(ring) || ring.length === 0) return [];
+  const out = [[ring[0][0], ring[0][1]]];
+  let prevLon = ring[0][0];
+  for (let i = 1; i < ring.length; i++) {
+    let lon = ring[i][0];
+    while (lon - prevLon > 180) lon -= 360;
+    while (lon - prevLon < -180) lon += 360;
+    out.push([lon, ring[i][1]]);
+    prevLon = lon;
+  }
+  return out;
+}
+
+/** Ray-casting point-in-ring test on an unwrapped [lon, lat] ring. */
+export function pointInRing(point, ring) {
+  if (!ring || ring.length < 3) return false;
+  const lat = point[1];
+  const baseLon = normalizeLon(point[0]);
+  for (const shift of [0, 360, -360]) {
+    const lon = baseLon + shift;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if ((yi > lat) !== (yj > lat)) {
+        const xIntersect = ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+        if (lon < xIntersect) inside = !inside;
+      }
+    }
+    if (inside) return true;
+  }
+  return false;
+}
+
+/** Precompile polygon rings with bounding boxes for fast point-in-polygon tests. */
+export function compilePolygonRings(polygons = []) {
+  const compiled = [];
+  for (const rawRing of polygons) {
+    const ring = unwrapRingLons(rawRing);
+    if (ring.length < 3) continue;
+    let minLon = Infinity;
+    let maxLon = -Infinity;
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    for (const [lon, lat] of ring) {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+    compiled.push({ ring, minLon, maxLon, minLat, maxLat });
+  }
+  return compiled;
+}
+
+/** Check if a [lon, lat] point lies inside any compiled polygon ring. */
+export function pointInCompiledRings(point, compiledRings) {
+  if (!compiledRings?.length) return false;
+  const lat = point[1];
+  const baseLon = normalizeLon(point[0]);
+  for (const item of compiledRings) {
+    if (lat < item.minLat || lat > item.maxLat) continue;
+    const inLonBounds =
+      (baseLon >= item.minLon && baseLon <= item.maxLon) ||
+      (baseLon + 360 >= item.minLon && baseLon + 360 <= item.maxLon) ||
+      (baseLon - 360 >= item.minLon && baseLon - 360 <= item.maxLon);
+    if (!inLonBounds) continue;
+    if (pointInRing(point, item.ring)) return true;
+  }
+  return false;
+}
+
 /** Reduce a polyline to at most maxPoints while keeping start and end exact. */
 export function decimateCoords(coords, maxPoints = 6) {
   if (!Array.isArray(coords) || coords.length <= maxPoints) {

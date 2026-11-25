@@ -19,6 +19,7 @@ const KEY_AVOID_IDS = new Set([
   'CP_CAPE',
   'AS_RUSSIA',
   'AS_MIDEAST',
+  'AS_GULF',
 ]);
 
 const ROLE_LABELS = {
@@ -30,7 +31,7 @@ const ROLE_LABELS = {
   hub: '中转枢纽',
 };
 
-const MODE_LABELS = { sea: '海运', air: '空运', rail: '铁路', road: '公路', local: '本地接驳' };
+const MODE_LABELS = { sea: '海运', air: '空运', rail: '铁路', road: '公路', local: '本地接驳', fir: 'FIR空域' };
 const NODE_GROUPS = {
   port: { label: '港口', color: 'sea' },
   airport: { label: '机场', color: 'air' },
@@ -89,7 +90,7 @@ let view = routeView;
 let fitRoutesOnReturn = false;
 let graphNodes = null;
 let graphNodeById = new Map();
-let graphLinks = { sea: null, land: null, road: null, air: null };
+let graphLinks = { sea: null, land: null, road: null, air: null, fir: null };
 let graphLinkCounts = null;
 let graphAirByNode = new Map();
 let graphLandByNode = new Map();
@@ -575,9 +576,52 @@ function drawRouteWaypointLabels(ctx, tokens, width, height) {
   ctx.restore();
 }
 
-function drawAirspaceBoxes(ctx, tokens, width, height) {
+function drawPolygonRings(ctx, rings, width, height, fill = false) {
+  for (const { points, minMx, maxMx, minMy, maxMy } of rings) {
+    const [, top] = projectRaw(0, minMy, width, height);
+    const [, bottom] = projectRaw(0, maxMy, width, height);
+    if (top > height || bottom < 0) continue;
+    for (const offset of visibleWorldOffsets(minMx, maxMx)) {
+      ctx.beginPath();
+      points.forEach(([mx, my], index) => {
+        const [x, y] = projectRaw(mx + offset, my, width, height);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      if (fill) ctx.fill();
+      ctx.stroke();
+    }
+  }
+}
+
+function drawAirspaces(ctx, tokens, width, height) {
+  if (graphLinks.fir && document.getElementById('fir-layer')?.checked) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(100, 116, 139, 0.38)';
+    ctx.lineWidth = 0.8;
+    ctx.setLineDash([3, 3]);
+    for (const fir of graphLinks.fir) {
+      drawPolygonRings(ctx, fir.rings, width, height, false);
+    }
+    if (view.zoom >= 2.2) {
+      ctx.font = '600 9.5px ui-monospace, SFMono-Regular, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = tokens.muted || '#64748b';
+      for (const fir of graphLinks.fir) {
+        if (fir.mx == null || fir.my == null) continue;
+        for (const offset of visibleWorldOffsets(fir.mx, fir.mx)) {
+          const [x, y] = projectRaw(fir.mx + offset, fir.my, width, height);
+          if (x >= 0 && x <= width && y >= 0 && y <= height) ctx.fillText(fir.id, x, y);
+        }
+      }
+    }
+    ctx.restore();
+  }
+
   if (!graphNodes || !document.getElementById('airspace-layer')?.checked) return;
-  const airspaces = graphNodes.filter((n) => n.boxes?.length);
+  const airspaces = graphNodes.filter((n) => n.polygons?.length || n.boxes?.length);
   if (!airspaces.length) return;
   ctx.save();
   ctx.font = '600 11px -apple-system, BlinkMacSystemFont, sans-serif';
@@ -585,26 +629,54 @@ function drawAirspaceBoxes(ctx, tokens, width, height) {
   ctx.textBaseline = 'middle';
   for (const node of airspaces) {
     const selected = node === selectedGraphNode;
-    ctx.fillStyle = selected ? 'rgba(220, 38, 38, 0.20)' : 'rgba(220, 38, 38, 0.09)';
-    ctx.strokeStyle = tokens.danger;
+    const isGulf = node.id === 'AS_GULF';
+    const fillColor = isGulf
+      ? (selected ? 'rgba(217, 119, 6, 0.24)' : 'rgba(217, 119, 6, 0.13)')
+      : (selected ? 'rgba(220, 38, 38, 0.24)' : 'rgba(220, 38, 38, 0.14)');
+    const strokeColor = isGulf ? tokens.modes.road : tokens.danger;
+    ctx.fillStyle = fillColor;
+    ctx.strokeStyle = strokeColor;
     ctx.lineWidth = selected ? 1.8 : 1.1;
     ctx.setLineDash([5, 4]);
-    for (const box of node.boxes) {
-      const minMx = lonToMx(box.minLon);
-      const maxMx = lonToMx(box.maxLon);
-      const spanMx = maxMx >= minMx ? maxMx - minMx : 1 - minMx + maxMx;
-      const top = latToMy(box.maxLat);
-      const bottom = latToMy(box.minLat);
-      for (const offset of visibleWorldOffsets(minMx, minMx + spanMx)) {
-        const [x1, y1] = projectRaw(minMx + offset, top, width, height);
-        const [x2, y2] = projectRaw(minMx + spanMx + offset, bottom, width, height);
-        if (x2 < 0 || x1 > width || y2 < 0 || y1 > height) continue;
-        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-        if (x2 - x1 > 70 && y2 - y1 > 22) {
-          ctx.fillStyle = tokens.danger;
-          ctx.fillText(node.name_zh || node.id, (x1 + x2) / 2, (y1 + y2) / 2);
-          ctx.fillStyle = selected ? 'rgba(220, 38, 38, 0.20)' : 'rgba(220, 38, 38, 0.09)';
+    if (node.polygons?.length) {
+      if (!node._compiledRings) {
+        node._compiledRings = node.polygons.map((ring) => {
+          const points = unwrapMxs(ring);
+          const xs = points.map(([mx]) => mx);
+          const ys = points.map(([, my]) => my);
+          return {
+            points,
+            minMx: Math.min(...xs), maxMx: Math.max(...xs),
+            minMy: Math.min(...ys), maxMy: Math.max(...ys),
+          };
+        });
+      }
+      drawPolygonRings(ctx, node._compiledRings, width, height, true);
+      for (const offset of visibleWorldOffsets(node.mx, node.mx)) {
+        const [x, y] = projectRaw(node.mx + offset, node.my, width, height);
+        if (x >= 0 && x <= width && y >= 0 && y <= height) {
+          ctx.fillStyle = strokeColor;
+          ctx.fillText(node.name_zh || node.id, x, y);
+        }
+      }
+    } else {
+      for (const box of node.boxes) {
+        const minMx = lonToMx(box.minLon);
+        const maxMx = lonToMx(box.maxLon);
+        const spanMx = maxMx >= minMx ? maxMx - minMx : 1 - minMx + maxMx;
+        const top = latToMy(box.maxLat);
+        const bottom = latToMy(box.minLat);
+        for (const offset of visibleWorldOffsets(minMx, minMx + spanMx)) {
+          const [x1, y1] = projectRaw(minMx + offset, top, width, height);
+          const [x2, y2] = projectRaw(minMx + spanMx + offset, bottom, width, height);
+          if (x2 < 0 || x1 > width || y2 < 0 || y1 > height) continue;
+          ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+          ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+          if (x2 - x1 > 70 && y2 - y1 > 22) {
+            ctx.fillStyle = strokeColor;
+            ctx.fillText(node.name_zh || node.id, (x1 + x2) / 2, (y1 + y2) / 2);
+            ctx.fillStyle = fillColor;
+          }
         }
       }
     }
@@ -630,7 +702,7 @@ function drawProjectedSegments(ctx, segments, width, height) {
 }
 
 function drawGraphLinks(ctx, tokens, width, height) {
-  drawAirspaceBoxes(ctx, tokens, width, height);
+  drawAirspaces(ctx, tokens, width, height);
 
   const layerStyles = [
     { layer: 'sea', alpha: 0.42, lineWidth: 1 },
@@ -1405,7 +1477,8 @@ function renderGraphNodeCard(node) {
   if (node.affectedLaneCount != null) metrics.push(['受影响线路', `${node.affectedLaneCount} 条`]);
   if (node.hasMarnet) metrics.push(['海运路网', node.snapDistanceKm != null ? `已接入 (${node.snapDistanceKm}km)` : '已接入']);
   if (node.hasRoadnet) metrics.push(['公路路网', node.roadSnapKm != null ? `已接入 (${node.roadSnapKm}km)` : '已接入']);
-  if (node.boxes?.length) metrics.push(['空域边界', `${node.boxes.length} 个区域`]);
+  if (node.firs?.length) metrics.push(['ICAO FIR', `${node.firs.length} 个`]);
+  else if (node.boxes?.length) metrics.push(['空域边界', `${node.boxes.length} 个区域`]);
 
   metricsEl.replaceChildren();
   metricsEl.classList.toggle('hidden', !metrics.length);
@@ -1439,6 +1512,9 @@ function renderGraphNodeCard(node) {
       const km = seg.distanceKm ? ` (${Math.round(seg.distanceKm)} km)` : '';
       connItems.push(`${seg.corridor || MODE_LABELS[seg.mode] || seg.mode} → ${peer ? nodeLabel(peer) : seg.peerId}${km}`);
     }
+  } else if (node.firs?.length) {
+    connTitle = `包含 ICAO FIR（${node.firs.length} 个）`;
+    connItems.push(node.firs.join(', '));
   }
   connEl.classList.toggle('hidden', !connItems.length);
   if (connItems.length) {
@@ -1539,6 +1615,31 @@ function prepareAirLinks(edges) {
   return segments;
 }
 
+function prepareFirLinks(firs) {
+  const out = [];
+  for (const fir of firs) {
+    const rings = (fir.polygons || []).map((ring) => {
+      const points = unwrapMxs(ring);
+      if (points.length < 3) return null;
+      const xs = points.map(([mx]) => mx);
+      const ys = points.map(([, my]) => my);
+      return {
+        points,
+        minMx: Math.min(...xs), maxMx: Math.max(...xs),
+        minMy: Math.min(...ys), maxMy: Math.max(...ys),
+      };
+    }).filter(Boolean);
+    if (!rings.length) continue;
+    out.push({
+      id: fir.id,
+      mx: Number.isFinite(fir.lon) ? lonToMx(fir.lon) : null,
+      my: Number.isFinite(fir.lat) ? latToMy(fir.lat) : null,
+      rings,
+    });
+  }
+  return out;
+}
+
 function updateGraphStatus() {
   const status = document.getElementById('graph-status');
   if (!graphNodes) return;
@@ -1549,7 +1650,7 @@ function updateGraphStatus() {
   const nodePart = visibleCount === totalCount
     ? `全部 ${totalCount.toLocaleString('zh-CN')} 个节点`
     : `显示 ${visibleCount.toLocaleString('zh-CN')} / ${totalCount.toLocaleString('zh-CN')} 个节点`;
-  const activeLayers = ['sea', 'air', 'land', 'road']
+  const activeLayers = ['sea', 'air', 'land', 'road', 'fir']
     .filter((l) => document.getElementById(`${l}-layer`)?.checked && graphLinks[l])
     .map((l) => {
       const n = graphLinkCounts?.[l];
@@ -1568,6 +1669,7 @@ async function ensureGraphLayer(layer) {
     .then((data) => {
       if (data.counts) graphLinkCounts = data.counts;
       if (layer === 'air') graphLinks.air = prepareAirLinks(data.air || []);
+      else if (layer === 'fir') graphLinks.fir = prepareFirLinks(data.fir || []);
       else graphLinks[layer] = prepareGraphLinks(data[layer] || [], layer);
       updateGraphStatus();
       if (selectedGraphNode) renderGraphNodeCard(selectedGraphNode);
@@ -1684,7 +1786,7 @@ function initNodeGraph() {
     }
   };
 
-  for (const layer of ['sea', 'air', 'land', 'road']) {
+  for (const layer of ['sea', 'air', 'land', 'road', 'fir']) {
     const checkbox = document.getElementById(`${layer}-layer`);
     checkbox.onchange = async () => {
       if (checkbox.checked && !graphLinks[layer]) {

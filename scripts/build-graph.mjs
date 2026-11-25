@@ -700,8 +700,80 @@ function buildAirnet(airlineRoutesRaw, nodesById) {
   return { edges };
 }
 
+function perpDistSq(pt, a, b) {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return (pt[0] - a[0]) ** 2 + (pt[1] - a[1]) ** 2;
+  const t = Math.max(0, Math.min(1, ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / lenSq));
+  return (pt[0] - (a[0] + t * dx)) ** 2 + (pt[1] - (a[1] + t * dy)) ** 2;
+}
+
+function douglasPeucker(pts, tolSq) {
+  if (pts.length <= 2) return pts;
+  let maxDist = 0;
+  let idx = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = perpDistSq(pts[i], pts[0], pts[pts.length - 1]);
+    if (d > maxDist) {
+      maxDist = d;
+      idx = i;
+    }
+  }
+  if (maxDist > tolSq) {
+    const left = douglasPeucker(pts.slice(0, idx + 1), tolSq);
+    const right = douglasPeucker(pts.slice(idx), tolSq);
+    return [...left.slice(0, -1), ...right];
+  }
+  return [pts[0], pts[pts.length - 1]];
+}
+
+function simplifyRing(ring, tolerance = 0.2) {
+  if (!Array.isArray(ring) || ring.length < 4) return null;
+  const simplified = douglasPeucker(ring, tolerance * tolerance);
+  const base = simplified.length >= 4 ? simplified : ring;
+  const rounded = base.map(([lon, lat]) => [+lon.toFixed(2), +lat.toFixed(2)]);
+  const first = rounded[0];
+  const last = rounded[rounded.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) rounded.push([first[0], first[1]]);
+  return rounded.length >= 4 ? rounded : null;
+}
+
+function buildFirCatalog(firRaw) {
+  const firById = new Map();
+  const firs = [];
+  for (const feature of firRaw?.features ?? []) {
+    const props = feature.properties ?? {};
+    const id = typeof props.id === 'string' ? props.id.trim().toUpperCase() : '';
+    if (!id || id.includes('-')) continue;
+    const geom = feature.geometry;
+    const rawRings =
+      geom?.type === 'Polygon'
+        ? [geom.coordinates[0]]
+        : geom?.type === 'MultiPolygon'
+        ? geom.coordinates.map((p) => p[0])
+        : [];
+    const simplified = rawRings.map((r) => simplifyRing(r, 0.2)).filter(Boolean);
+    const detailed = rawRings.map((r) => simplifyRing(r, 0.15)).filter(Boolean);
+    if (!simplified.length) continue;
+
+    firById.set(id, detailed.length ? detailed : simplified);
+    const lon = Number(props.label_lon);
+    const lat = Number(props.label_lat);
+    firs.push({
+      id,
+      oceanic: props.oceanic === '1',
+      ...(Number.isFinite(lon) && { lon: +lon.toFixed(2) }),
+      ...(Number.isFinite(lat) && { lat: +lat.toFixed(2) }),
+      region: props.region || null,
+      polygons: simplified,
+    });
+  }
+  return { firById, firs };
+}
+
 async function main() {
-  const [marnetRaw, portsRaw, airportsCsv, roadsRaw, airlineRoutesRaw, countriesRaw, chokepointsCfg, corridorsCfg, seedNodes] =
+  const [marnetRaw, portsRaw, airportsCsv, roadsRaw, airlineRoutesRaw, countriesRaw, chokepointsCfg, corridorsCfg, seedNodes, firRaw] =
     await Promise.all([
       readFile(join(RAW_DIR, 'marnet_searoute.geojson'), 'utf8').then(JSON.parse),
       readFile(join(RAW_DIR, 'ports.geojson'), 'utf8').then(JSON.parse),
@@ -712,7 +784,19 @@ async function main() {
       readFile(join(CURATED_DIR, 'chokepoints.json'), 'utf8').then(JSON.parse),
       readFile(join(CURATED_DIR, 'rail-land-corridors.json'), 'utf8').then(JSON.parse),
       readFile(join(CURATED_DIR, 'seed-nodes.json'), 'utf8').then(JSON.parse),
+      readFile(join(RAW_DIR, 'fir_boundaries.geojson'), 'utf8').then(JSON.parse).catch(() => null),
     ]);
+
+  const { firById, firs } = buildFirCatalog(firRaw);
+  for (const as of [...(chokepointsCfg.airspaces ?? []), ...(chokepointsCfg.defaultClosedAirspaces ?? [])]) {
+    if (!as.firs?.length) continue;
+    const polygons = [];
+    for (const firId of as.firs) {
+      const rings = firById.get(firId);
+      if (rings) polygons.push(...rings);
+    }
+    if (polygons.length) as.polygons = polygons;
+  }
 
   const iso3ToIso2 = new Map();
   for (const f of countriesRaw.features ?? []) {
@@ -886,6 +970,8 @@ async function main() {
       lon: as.lon,
       lat: as.lat,
       boxes: as.boxes,
+      ...(as.firs?.length && { firs: as.firs }),
+      ...(as.polygons?.length && { polygons: as.polygons }),
       aliases: as.aliases ?? [],
       curated: true,
     });
@@ -1045,18 +1131,20 @@ async function main() {
     airnet: {
       edges: airnet.edges,
     },
+    firs,
     landEdges,
   };
 
   const payloadJson = JSON.stringify(payload);
   const graphVersion = createHash('sha256').update(payloadJson).digest('hex').slice(0, 12);
 
-  const [marnetStat, portsStat, airportsStat, roadsStat, airRoutesStat] = await Promise.all([
+  const [marnetStat, portsStat, airportsStat, roadsStat, airRoutesStat, firStat] = await Promise.all([
     stat(join(RAW_DIR, 'marnet_searoute.geojson')),
     stat(join(RAW_DIR, 'ports.geojson')),
     stat(join(RAW_DIR, 'airports.csv')),
     stat(join(RAW_DIR, 'ne_10m_roads.geojson')),
     stat(join(RAW_DIR, 'airline_routes.json')),
+    stat(join(RAW_DIR, 'fir_boundaries.geojson')).catch(() => null),
   ]);
 
   const counts = {
@@ -1066,6 +1154,7 @@ async function main() {
     snappedPorts: nodes.filter((n) => n.functions?.includes('port') && n.marnetVertexId != null).length,
     airports: nodes.filter((n) => n.type === 'airport' || n.type === 'hub_airport').length,
     chokepoints: nodes.filter((n) => n.type === 'chokepoint').length,
+    firCount: firs.length,
     marnetVertices: marnet.vertices.length,
     marnetEdges: marnet.edges.length,
     marnetComponents: marnet.componentSizes.slice(0, 5),
@@ -1093,6 +1182,7 @@ async function main() {
       airports: { bytes: airportsStat.size, mtime: airportsStat.mtime.toISOString() },
       ne_10m_roads: { bytes: roadsStat.size, mtime: roadsStat.mtime.toISOString() },
       airline_routes: { bytes: airRoutesStat.size, mtime: airRoutesStat.mtime.toISOString() },
+      ...(firStat && { fir_boundaries: { bytes: firStat.size, mtime: firStat.mtime.toISOString() } }),
     },
     counts,
   };

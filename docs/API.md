@@ -15,7 +15,7 @@
 | 词表与图谱 | `GET` | `/v1/nodes` | 节点搜索 | 按中英文名称、UN/LOCODE、IATA 三字码、别名或港群前缀检索可路由节点。 |
 | 词表与图谱 | `GET` | `/v1/chokepoints` | 咽喉与空域 | 获取全部规范海运咽喉与受控空域列表，以及预计算队列中的受影响线路统计。 |
 | 词表与图谱 | `GET` | `/v1/graph/nodes` | 全量图谱节点 | 一次性返回图谱内所有带有效坐标的非国家节点及其枢纽/接入元数据，供节点图谱视图与本地词表检索使用。 |
-| 词表与图谱 | `GET` | `/v1/graph/links` | 多式联运路网连线 | 返回图谱中的 MARNET 海运航段、陆铁走廊、全球公路网及航空航线连线数据，支持按 layers 参数按需拉取。 |
+| 词表与图谱 | `GET` | `/v1/graph/links` | 多式联运路网连线 | 返回图谱中的 MARNET 海运航段、陆铁走廊、全球公路网、航空航线及全球 ICAO FIR 空域边界数据，支持按 layers 参数按需拉取。 |
 | 快照与运维 | `GET` | `/v1/snapshots/risk-radar` | Risk Radar 快照 | 导出与 supply-chain-risk-radar/network.mjs 兼容的静态风险雷达网络快照。 |
 | 快照与运维 | `GET` | `/health` | 健康检查 | 返回服务存活状态、当前图谱版本、构建节点边统计、预计算快照信息与缓存命中率。 |
 
@@ -552,7 +552,7 @@ curl 'http://127.0.0.1:4180/v1/graph/nodes'
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `graphVersion` | `string` | 当前图谱版本。 |
-| `nodes[]` | `object[]` | 节点数组，含 id、code、codeStandard、type、functions[]、name_zh、name_en、country、region、lon、lat、aliases[]、featured、portTier、airportSize、routeCount、isHub、major、hasMarnet、hasRoadnet、landDegree、affectedLaneCount、boxes 等字段。 |
+| `nodes[]` | `object[]` | 节点数组，含 id、code、codeStandard、type、functions[]、name_zh、name_en、country、region、lon、lat、aliases[]、featured、portTier、airportSize、routeCount、isHub、major、hasMarnet、hasRoadnet、landDegree、affectedLaneCount、firs、polygons、boxes 等字段。 |
 
 **返回示例**
 
@@ -590,7 +590,7 @@ curl 'http://127.0.0.1:4180/v1/graph/nodes'
 
 #### `GET /v1/graph/links` · 多式联运路网连线
 
-返回图谱中的 MARNET 海运航段、陆铁走廊、全球公路网及航空航线连线数据，支持按 layers 参数按需拉取。
+返回图谱中的 MARNET 海运航段、陆铁走廊、全球公路网、航空航线及全球 ICAO FIR 空域边界数据，支持按 layers 参数按需拉取。
 
 > **说明**：不传 layers 时默认返回 sea 与 land；全量路网体积较大，建议按图层按需请求并按 graphVersion 做本地缓存。
 
@@ -598,7 +598,7 @@ curl 'http://127.0.0.1:4180/v1/graph/nodes'
 
 | 参数名 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
-| `layers` | `string` | 可选 | `undefined` | 逗号分隔的图层列表，支持 sea、land、road、air。 |
+| `layers` | `string` | 可选 | `undefined` | 逗号分隔的图层列表，支持 sea、land、road、air、fir。 |
 
 **请求示例**
 
@@ -611,11 +611,12 @@ curl 'http://127.0.0.1:4180/v1/graph/links'
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `graphVersion` | `string` | 当前图谱版本。 |
-| `counts` | `object` | 各图层总边数：{ sea, land, road, air }。 |
+| `counts` | `object` | 各图层总数量：{ sea, land, road, air, fir }。 |
 | `sea[]` | `object[]` | 海运航段数组，每项为 { mode: "sea", coords: [[lon, lat], ...] }。 |
 | `land[]` | `object[]` | 陆铁连线数组，每项为 { mode, from, to, corridor, distanceKm, coords: [[lon, lat], ...] }。 |
 | `road[]` | `object[]` | 全球公路网边数组，每项为 { mode: "road", coords: [[lon, lat], ...] }。 |
 | `air[]` | `array[]` | 航空航线紧凑元组数组，每项为 [fromIata, toIata, freq, crossesRussia]。 |
+| `fir[]` | `object[]` | 全球 ICAO FIR 空域边界数组，每项为 { id, oceanic, lon, lat, region, polygons }。 |
 
 **返回示例**
 

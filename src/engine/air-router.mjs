@@ -1,4 +1,10 @@
-import { greatCirclePoints, haversineKm, pointInBox } from './geo.mjs';
+import {
+  compilePolygonRings,
+  greatCirclePoints,
+  haversineKm,
+  pointInBox,
+  pointInCompiledRings,
+} from './geo.mjs';
 import { borderPenalty, scoreRoute } from './cost-model.mjs';
 import { crossesOpenSea } from './land-mask.mjs';
 
@@ -26,8 +32,14 @@ export function createAirRouter(graph) {
   );
   const airportById = new Map(airports.map((a) => [a.id, a]));
   const cargoHubs = airports.filter((a) => a.isHub);
-  const airspaces = graph.chokepoints?.airspaces ?? [];
+  const airspaces = (graph.chokepoints?.airspaces ?? []).map((as) => ({
+    ...as,
+    compiledPolygons: compilePolygonRings(as.polygons ?? []),
+  }));
   const airspaceById = new Map(airspaces.map((a) => [a.id, a]));
+  const defaultClosedPolygons = compilePolygonRings(
+    (graph.chokepoints?.defaultClosedAirspaces ?? []).flatMap((a) => a.polygons ?? [])
+  );
 
   const airAdj = new Map();
   for (const [u, v, carriers = 1, freighter = 0] of graph.airnet?.edges ?? []) {
@@ -64,19 +76,33 @@ export function createAirRouter(graph) {
     return chosen.slice(0, limit).map(({ airport, drayageKm }) => ({ airport, drayageKm }));
   }
 
+  function pointInAirspace(pt, as) {
+    if (as.compiledPolygons?.length) return pointInCompiledRings(pt, as.compiledPolygons);
+    return (as.boxes ?? []).some((box) => pointInBox(pt, box));
+  }
+
+  function pointInDefaultClosed(pt) {
+    if (defaultClosedPolygons.length) return pointInCompiledRings(pt, defaultClosedPolygons);
+    return DEFAULT_CLOSED_BOXES.some((box) => pointInBox(pt, box));
+  }
+
   function crossedAirspacesForPoints(pts) {
     const hit = [];
     for (const as of airspaces) {
-      if (pts.some((pt) => as.boxes.some((box) => pointInBox(pt, box)))) {
+      if (pts.some((pt) => pointInAirspace(pt, as))) {
         hit.push(as.id);
       }
     }
     return hit;
   }
 
-  function pointsCrossBoxes(pts, boxes) {
-    if (!boxes.length) return false;
-    return pts.some((pt) => boxes.some((box) => pointInBox(pt, box)));
+  function pointsCrossRestricted(pts, restrictedAirspaces, includeDefaultClosed) {
+    if (!restrictedAirspaces.length && !includeDefaultClosed) return false;
+    return pts.some(
+      (pt) =>
+        restrictedAirspaces.some((as) => pointInAirspace(pt, as)) ||
+        (includeDefaultClosed && pointInDefaultClosed(pt))
+    );
   }
 
   function polylinePoints(waypoints, stepsPerSeg = 10) {
@@ -97,26 +123,23 @@ export function createAirRouter(graph) {
 
   function planAirSegment(fromAp, toAp, avoidSet) {
     const userBlocked = airspaces.filter((a) => avoidSet.has(a.id));
-    const userBlockedBoxes = userBlocked.flatMap((a) => a.boxes);
     if (
-      userBlockedBoxes.some((b) => pointInBox([fromAp.lon, fromAp.lat], b)) ||
-      userBlockedBoxes.some((b) => pointInBox([toAp.lon, toAp.lat], b))
+      userBlocked.some((as) => pointInAirspace([fromAp.lon, fromAp.lat], as)) ||
+      userBlocked.some((as) => pointInAirspace([toAp.lon, toAp.lat], as))
     ) {
       return null;
     }
 
     const endpointsInUkraine =
-      DEFAULT_CLOSED_BOXES.some((b) => pointInBox([fromAp.lon, fromAp.lat], b)) ||
-      DEFAULT_CLOSED_BOXES.some((b) => pointInBox([toAp.lon, toAp.lat], b));
-    const hardBlockedBoxes = endpointsInUkraine
-      ? userBlockedBoxes
-      : [...userBlockedBoxes, ...DEFAULT_CLOSED_BOXES];
+      pointInDefaultClosed([fromAp.lon, fromAp.lat]) ||
+      pointInDefaultClosed([toAp.lon, toAp.lat]);
+    const checkDefaultClosed = !endpointsInUkraine;
 
     const directKm = haversineKm(fromAp.lon, fromAp.lat, toAp.lon, toAp.lat);
     const gcPts = greatCirclePoints([fromAp.lon, fromAp.lat], [toAp.lon, toAp.lat], 22);
     const gcCrossed = crossedAirspacesForPoints(gcPts);
 
-    if (!pointsCrossBoxes(gcPts, hardBlockedBoxes)) {
+    if (!pointsCrossRestricted(gcPts, userBlocked, checkDefaultClosed)) {
       return {
         distanceKm: +directKm.toFixed(1),
         airspaces: gcCrossed,
@@ -142,7 +165,7 @@ export function createAirRouter(graph) {
         10
       );
       if (distanceKm > Math.min(13800, directKm * 1.42)) continue;
-      if (pointsCrossBoxes(coords, hardBlockedBoxes)) continue;
+      if (pointsCrossRestricted(coords, userBlocked, checkDefaultClosed)) continue;
 
       if (!best || distanceKm < best.distanceKm) {
         best = {

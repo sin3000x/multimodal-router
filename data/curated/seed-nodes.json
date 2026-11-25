@@ -1226,14 +1226,15 @@
  {
   "id": "AS_MIDEAST",
   "type": "airspace",
-  "name_zh": "中东空域",
-  "name_en": "Middle East Airspace",
+  "name_zh": "中东冲突空域",
+  "name_en": "Middle East conflict airspace",
   "country": "",
   "region": "middleEast",
-  "lon": 46,
-  "lat": 28,
+  "lon": 48,
+  "lat": 32.5,
   "aliases": [
-   "Gulf airspace"
+   "中东空域",
+   "Middle East airspace"
   ]
  },
  {

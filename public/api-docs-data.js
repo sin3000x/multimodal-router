@@ -285,7 +285,7 @@ export const API_ENDPOINTS = [
     params: [],
     responseFields: [
       { name: 'graphVersion', type: 'string', desc: '当前图谱版本。' },
-      { name: 'nodes[]', type: 'object[]', desc: '节点数组，含 id、code、codeStandard、type、functions[]、name_zh、name_en、country、region、lon、lat、aliases[]、featured、portTier、airportSize、routeCount、isHub、major、hasMarnet、hasRoadnet、landDegree、affectedLaneCount、boxes 等字段。' },
+      { name: 'nodes[]', type: 'object[]', desc: '节点数组，含 id、code、codeStandard、type、functions[]、name_zh、name_en、country、region、lon、lat、aliases[]、featured、portTier、airportSize、routeCount、isHub、major、hasMarnet、hasRoadnet、landDegree、affectedLaneCount、firs、polygons、boxes 等字段。' },
     ],
     responseSample: {
       graphVersion: '9f3c...',
@@ -319,18 +319,19 @@ export const API_ENDPOINTS = [
     methods: ['GET'],
     path: '/v1/graph/links',
     title: '多式联运路网连线',
-    summary: '返回图谱中的 MARNET 海运航段、陆铁走廊、全球公路网及航空航线连线数据，支持按 layers 参数按需拉取。',
+    summary: '返回图谱中的 MARNET 海运航段、陆铁走廊、全球公路网、航空航线及全球 ICAO FIR 空域边界数据，支持按 layers 参数按需拉取。',
     note: '不传 layers 时默认返回 sea 与 land；全量路网体积较大，建议按图层按需请求并按 graphVersion 做本地缓存。',
     params: [
-      { name: 'layers', in: 'query', type: 'string', required: false, default: 'sea,land', desc: '逗号分隔的图层列表，支持 sea、land、road、air。' },
+      { name: 'layers', in: 'query', type: 'string', required: false, default: 'sea,land', desc: '逗号分隔的图层列表，支持 sea、land、road、air、fir。' },
     ],
     responseFields: [
       { name: 'graphVersion', type: 'string', desc: '当前图谱版本。' },
-      { name: 'counts', type: 'object', desc: '各图层总边数：{ sea, land, road, air }。' },
+      { name: 'counts', type: 'object', desc: '各图层总数量：{ sea, land, road, air, fir }。' },
       { name: 'sea[]', type: 'object[]', desc: '海运航段数组，每项为 { mode: "sea", coords: [[lon, lat], ...] }。' },
       { name: 'land[]', type: 'object[]', desc: '陆铁连线数组，每项为 { mode, from, to, corridor, distanceKm, coords: [[lon, lat], ...] }。' },
       { name: 'road[]', type: 'object[]', desc: '全球公路网边数组，每项为 { mode: "road", coords: [[lon, lat], ...] }。' },
       { name: 'air[]', type: 'array[]', desc: '航空航线紧凑元组数组，每项为 [fromIata, toIata, freq, crossesRussia]。' },
+      { name: 'fir[]', type: 'object[]', desc: '全球 ICAO FIR 空域边界数组，每项为 { id, oceanic, lon, lat, region, polygons }。' },
     ],
     responseSample: {
       graphVersion: '9f3c...',

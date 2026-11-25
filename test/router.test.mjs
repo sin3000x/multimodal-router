@@ -31,7 +31,8 @@ test('Node IDs reuse ISO-3166-1, IATA, and UN/LOCODE standard codes without synt
 
   // Decoupled clean geographic names
   assert.equal(router.resolveNode('CP_CAPE')?.name_zh, '好望角');
-  assert.equal(router.resolveNode('AS_MIDEAST')?.name_zh, '中东空域');
+  assert.equal(router.resolveNode('AS_MIDEAST')?.name_zh, '中东冲突空域');
+  assert.equal(router.resolveNode('AS_GULF')?.name_zh, '海湾与沙特空域');
   assert.equal(router.resolveNode('CNALA')?.name_zh, '阿拉山口');
 });
 
@@ -348,6 +349,11 @@ test('Real airnet prevents fake intercontinental non-stops, avoids Ukraine by de
   const caiAvoidMe = router.findRoutes({ from: 'CNSZX', to: 'EGCAI', modes: ['air'], avoid: ['AS_MIDEAST'], maxRoutes: 6 }).routes;
   assert.ok(caiAvoidMe.length >= 1);
   assert.ok(caiAvoidMe.every((r) => !r.chokepoints.some((c) => c.id === 'AS_MIDEAST')));
+
+  // Avoiding both AS_MIDEAST and AS_GULF forces routing around the entire Arabian Peninsula
+  const caiAvoidBoth = router.findRoutes({ from: 'CNSZX', to: 'EGCAI', modes: ['air'], avoid: ['AS_MIDEAST', 'AS_GULF'], maxRoutes: 6 }).routes;
+  assert.ok(caiAvoidBoth.length >= 1);
+  assert.ok(caiAvoidBoth.every((r) => !r.chokepoints.some((c) => c.id === 'AS_MIDEAST' || c.id === 'AS_GULF')));
 
   // SZX -> ORD includes ANC refueling tech-stop
   const ordAir = router.findRoutes({ from: 'SZX', to: 'ORD', modes: ['air'], maxRoutes: 6 }).routes;

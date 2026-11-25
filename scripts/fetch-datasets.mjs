@@ -34,6 +34,11 @@ const DATASETS = [
     url: 'https://raw.githubusercontent.com/Jonty/airline-route-data/main/airline_routes.json',
     description: 'Global scheduled airline route network indexed by IATA code',
   },
+  {
+    name: 'fir_boundaries.geojson',
+    url: 'https://raw.githubusercontent.com/vatsimnetwork/vatspy-data-project/master/Boundaries.geojson',
+    description: 'VATSIM VATSpy global ICAO FIR/UIR airspace boundary polygons (GeoJSON)',
+  },
 ];
 
 async function existsNonEmpty(filePath) {

@@ -76,7 +76,7 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     assert.ok(graphNodes.nodes.length > 100);
     assert.ok(graphNodes.nodes.some((node) => node.id === 'PVG' && node.type === 'airport' && node.routeCount > 0));
     assert.ok(graphNodes.nodes.some((node) => node.id === 'NLRTM' && node.portTier === 1 && node.hasMarnet === true));
-    assert.ok(graphNodes.nodes.some((node) => node.id === 'AS_RUSSIA' && Array.isArray(node.boxes) && node.boxes.length > 0));
+    assert.ok(graphNodes.nodes.some((node) => node.id === 'AS_RUSSIA' && Array.isArray(node.boxes) && node.boxes.length > 0 && Array.isArray(node.firs) && node.firs.length > 0 && Array.isArray(node.polygons) && node.polygons.length > 0));
     assert.ok(graphNodes.nodes.some((node) => node.id === 'CNSZX' && node.landDegree > 0));
     assert.ok(graphNodes.nodes.every((node) => Number.isFinite(node.lon) && Number.isFinite(node.lat)));
     assert.deepEqual(graphNodes.nodes.filter(({ name_zh }) => !/\p{Script=Han}/u.test(name_zh ?? '')).map(({ id }) => id), []);
@@ -102,6 +102,11 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     assert.equal(roadAirLinks.sea, undefined);
     assert.ok(roadAirLinks.road.length > 1000);
     assert.ok(roadAirLinks.air.length > 1000);
+
+    const firRes = await fetch(`${baseUrl}/v1/graph/links?layers=fir`);
+    assert.equal(firRes.status, 200);
+    const firLinks = await firRes.json();
+    assert.ok(Array.isArray(firLinks.fir) && firLinks.fir.length > 300);
 
     // 3. Chokepoints
     const cpRes = await fetch(`${baseUrl}/v1/chokepoints`);

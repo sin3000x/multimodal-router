@@ -184,8 +184,8 @@ export async function createRouterService({
             };
             for (const key of [
               'codeStandard', 'region', 'portTier', 'airportSize', 'routeCount',
-              'isHub', 'major', 'marnetPassage', 'boxes', 'municipality',
-              'snapDistanceKm', 'roadSnapKm',
+              'isHub', 'major', 'marnetPassage', 'boxes', 'firs', 'polygons',
+              'municipality', 'snapDistanceKm', 'roadSnapKm',
             ]) {
               if (node[key] !== undefined) item[key] = node[key];
             }
@@ -203,6 +203,7 @@ export async function createRouterService({
           land: (graph.landEdges ?? []).length,
           road: (graph.roadnet?.edges ?? []).length,
           air: (graph.airnet?.edges ?? []).length,
+          fir: (graph.firs ?? []).length,
         };
         const rawLayers = url.searchParams.get('layers');
         const requested = rawLayers
@@ -227,6 +228,9 @@ export async function createRouterService({
         }
         if (requested.has('air')) {
           payload.air = graph.airnet?.edges ?? [];
+        }
+        if (requested.has('fir')) {
+          payload.fir = graph.firs ?? [];
         }
         sendJson(res, 200, payload);
         return;
