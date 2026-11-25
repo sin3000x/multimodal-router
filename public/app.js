@@ -8,7 +8,7 @@ import {
   formatDeltaKm,
   formatCostMultiplier,
 } from './compare-model.js';
-import { GRAPH_MAX_ZOOM, GRAPH_ZOOM_INPUT, ROUTE_MAX_ZOOM } from './map-config.js';
+import { GRAPH_MAX_ZOOM, GRAPH_ZOOM_INPUT, ROUTE_MAX_ZOOM, getLegStrokeStyle } from './map-config.js';
 
 const KEY_AVOID_IDS = new Set([
   'CP_SUEZ',
@@ -763,20 +763,12 @@ function drawWorldMap(routes, highlightedId) {
     const isSelected = highlightedId === route.routeId;
     const isHovered = hoveredLeg?.route === route;
     const isPaired = Boolean(pairedId && route.routeId === pairedId);
-    const isBaselineAffected = route.compareRole === 'baseline-affected';
-    const color = isBaselineAffected ? tokens.baseline : (tokens.modes[route.mode] || tokens.modes.sea);
     ctx.save();
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    const dash = isBaselineAffected
-      ? [8, 5]
-      : route.mode === 'air'
-        ? [6, 4]
-        : route.mode === 'rail'
-          ? [3, 3.5]
-          : [];
 
     for (const leg of route.legs || []) {
+      const { color, dash } = getLegStrokeStyle(route, leg, tokens);
       const unwrapped = unwrapMxs(leg.geometry || []);
       if (unwrapped.length < 2) continue;
       const longitudes = unwrapped.map(([mx]) => mx);

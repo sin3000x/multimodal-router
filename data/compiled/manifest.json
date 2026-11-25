@@ -1,6 +1,6 @@
 {
-  "graphVersion": "f7c3526da8b0",
-  "builtAt": "2026-11-24T07:35:35.867Z",
+  "graphVersion": "ee52afcbd361",
+  "builtAt": "2026-11-25T06:20:19.205Z",
   "sources": {
     "marnet_searoute": {
       "bytes": 746451,
@@ -13,10 +13,14 @@
     "airports": {
       "bytes": 12762265,
       "mtime": "2026-11-23T02:45:37.254Z"
+    },
+    "ne_10m_roads": {
+      "bytes": 50474096,
+      "mtime": "2026-11-25T06:19:41.714Z"
     }
   },
   "counts": {
-    "nodesTotal": 6789,
+    "nodesTotal": 6801,
     "cities": 31,
     "ports": 3437,
     "snappedPorts": 3437,
@@ -27,14 +31,23 @@
     "marnetComponents": [
       6704
     ],
-    "landEdges": 58,
+    "roadnetVertices": 20045,
+    "roadnetEdges": 27368,
+    "roadnetComponents": [
+      13825,
+      1780,
+      1036,
+      348,
+      280
+    ],
+    "landEdges": 83,
     "publicPortsLoaded": 3961,
     "publicPortsSnapped": 3464,
     "publicAirportsLoaded": 3245,
     "byStandard": {
-      "UN/LOCODE": 3459,
+      "UN/LOCODE": 3463,
       "ISO-3166-1": 43,
-      "custom": 42,
+      "custom": 50,
       "IATA": 3245
     }
   }

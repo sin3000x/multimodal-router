@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRouter } from '../src/engine/router.mjs';
 import { createRouteCache } from '../src/cache/route-cache.mjs';
+import { crossesOpenSea } from '../src/engine/land-mask.mjs';
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const graph = JSON.parse(await readFile(join(ROOT_DIR, 'data', 'compiled', 'graph.json'), 'utf8'));
@@ -198,4 +199,122 @@ test('Two-tier cache serves memory hit and persists across fresh SQLite instance
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test('selectGatewayPorts excludes ports separated by open sea (e.g. IRKIH -> AEDXB)', () => {
+  const dxbSea = router.findRoutes({ from: 'CNSZX', to: 'AEDXB', modes: ['sea'], maxRoutes: 8 }).routes;
+  assert.ok(dxbSea.some((r) => r.destGateway.id === 'AEJEA'));
+  assert.ok(dxbSea.some((r) => r.destGateway.id === 'AEKLF'));
+  assert.ok(!dxbSea.some((r) => r.destGateway.id === 'IRKIH'), 'should not route Dubai via Kish Island across Persian Gulf');
+
+  const kwiSea = router.findRoutes({ from: 'CNSZX', to: 'KWKWI', modes: ['sea'], maxRoutes: 8 }).routes;
+  assert.ok(!kwiSea.some((r) => r.destGateway.id === 'IRMRX'), 'should not route Kuwait via Bandar Mahshahr across sea');
+
+  const jktSea = router.findRoutes({ from: 'CNSZX', to: 'IDJKT', modes: ['sea'], maxRoutes: 8 }).routes;
+  assert.ok(!jktSea.some((r) => r.destGateway.id === 'IDPJG'), 'should not route Jakarta via Panjang across Sunda Strait');
+
+  const dohSea = router.findRoutes({ from: 'CNSZX', to: 'QADOH', modes: ['sea'], maxRoutes: 8 }).routes;
+  assert.ok(!dohSea.some((r) => r.destGateway.id === 'SADMM'), 'should not route Doha via Dammam across Gulf waters');
+
+  const mctSea = router.findRoutes({ from: 'CNSZX', to: 'OMMCT', modes: ['sea'], maxRoutes: 8, includeGeometry: true }).routes;
+  assert.equal(mctSea[0].destGateway.id, 'OMMCT');
+  const sohViaMct = mctSea.find((r) => r.destGateway.id === 'OMSOH');
+  if (sohViaMct) {
+    const dray = sohViaMct.legs[sohViaMct.legs.length - 1];
+    assert.ok(dray.geometry.length >= 4, 'coastal corridor should use curved overland polyline');
+    for (let i = 1; i < dray.geometry.length; i++) {
+      assert.equal(crossesOpenSea(dray.geometry[i - 1], dray.geometry[i]), false);
+    }
+  }
+
+  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  const pt = (id) => [nodeById.get(id).lon, nodeById.get(id).lat];
+  assert.equal(crossesOpenSea(pt('IRKIH'), pt('AEDXB')), true);
+  assert.equal(crossesOpenSea(pt('IDPJG'), pt('IDJKT')), true);
+  assert.equal(crossesOpenSea(pt('OMSOH'), pt('OMMCT')), true);
+  assert.equal(crossesOpenSea(pt('AEKLF'), pt('AEDXB')), false);
+  assert.equal(crossesOpenSea(pt('AEJEA'), pt('AEDXB')), false);
+  assert.equal(crossesOpenSea(pt('HKHKG'), pt('CNSZX')), false);
+
+  for (const [from, to] of [
+    ['AEDXB', 'IRKIH'],
+    ['AEDXB', 'IRBND'],
+    ['DJJIB', 'YEADE'],
+  ]) {
+    const roadRes = router.findRoutes({ from, to, modes: ['road'], maxRoutes: 4 });
+    assert.equal(roadRes.routes.length, 0, `expected no direct cross-sea road route for ${from} -> ${to}`);
+  }
+
+  // KWKWI -> IRMRX is connected overland around Iraq/Shatt al-Arab (not 167.8 km across sea)
+  const kwiMrx = router.findRoutes({ from: 'KWKWI', to: 'IRMRX', modes: ['road'], includeGeometry: true }).routes;
+  if (kwiMrx.length > 0) {
+    assert.ok(kwiMrx[0].metrics.distanceKm > 220);
+    assert.ok(kwiMrx[0].legs[0].geometry.length >= 4);
+  }
+
+  const dohDmm = router.findRoutes({ from: 'QADOH', to: 'SADMM', modes: ['road'], maxRoutes: 4 }).routes;
+  assert.equal(dohDmm.length, 1);
+  assert.ok(dohDmm[0].chokepoints.some((c) => c.id === 'BORDER_SALWA'));
+
+  const overlandRoad = router.findRoutes({ from: 'AEDXB', to: 'AEKLF', modes: ['road'], maxRoutes: 4 });
+  assert.equal(overlandRoad.routes.length, 1);
+
+  for (const to of ['AEDXB', 'OMMCT', 'DJJIB']) {
+    const airRes = router.findRoutes({ from: 'CNSZX', to, modes: ['air'], includeGeometry: true });
+    for (const r of airRes.routes) {
+      for (const leg of r.legs) {
+        if (leg.mode === 'road' && leg.geometry?.length === 2) {
+          assert.equal(crossesOpenSea(leg.geometry[0], leg.geometry[1]), false);
+        }
+      }
+    }
+  }
+});
+
+test('3-tier port hierarchy, cross-border friction, and MEA landbridge corridors work end-to-end', () => {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  assert.equal(byId.get('AEJEA')?.portTier, 1);
+  assert.equal(byId.get('AEKLF')?.portTier, 2);
+  assert.equal(byId.get('OMSOH')?.portTier, 2);
+  assert.equal(byId.get('QAHMD')?.portTier, 2);
+
+  // Cross-border Sohar -> Dubai incurs GCC border friction vs domestic Khor Fakkan -> Dubai
+  const domestic = router.findRoutes({ from: 'AEKLF', to: 'AEDXB', modes: ['road'], maxRoutes: 4 }).routes[0];
+  const crossBorder = router.findRoutes({ from: 'OMSOH', to: 'AEDXB', modes: ['road'], maxRoutes: 4 }).routes[0];
+  assert.ok(domestic && crossBorder);
+  assert.ok(crossBorder.chokepoints.some((c) => c.id === 'BORDER_HATTA'));
+  assert.ok(crossBorder.metrics.transitDays > domestic.metrics.transitDays);
+  assert.ok(crossBorder.metrics.costIndex > domestic.metrics.costIndex);
+
+  // Red Sea (Jeddah) -> Gulf cities via Saudi landbridge
+  const jedDoh = router.findRoutes({ from: 'SAJED', to: 'QADOH', modes: ['road', 'rail'], maxRoutes: 4 }).routes;
+  assert.ok(jedDoh.some((r) => r.chokepoints.some((c) => c.id === 'BORDER_SALWA')));
+  const jedKwi = router.findRoutes({ from: 'SAJED', to: 'KWKWI', modes: ['road', 'rail'], maxRoutes: 4 }).routes;
+  assert.ok(jedKwi.some((r) => r.chokepoints.some((c) => c.id === 'BORDER_KHAFJI')));
+
+  // East Africa SGR rail & landlocked multi-hop corridor (Kampala -> Mombasa)
+  const nboSea = router.findRoutes({ from: 'CNSZX', to: 'KENBO', modes: ['sea'], maxRoutes: 4 }).routes;
+  assert.equal(nboSea[0].destGateway.id, 'KEMBA');
+  const klaSea = router.findRoutes({ from: 'CNSZX', to: 'UGKLA', modes: ['sea'], maxRoutes: 4 }).routes;
+  assert.equal(klaSea[0].destGateway.id, 'KEMBA');
+});
+
+test('Global roadnet routes overland around Bohai Bay for Weihai -> Dalian (CNWEI -> CNDLC)', () => {
+  const res = router.findRoutes({
+    from: 'CNWEI',
+    to: 'CNDLC',
+    modes: ['road'],
+    includeGeometry: true,
+  });
+  assert.equal(res.routes.length, 1);
+  const route = res.routes[0];
+  assert.equal(route.mode, 'road');
+  assert.ok(
+    route.metrics.distanceKm >= 1100 && route.metrics.distanceKm <= 2000,
+    `expected Bohai Bay overland detour (~1100-2000 km), got ${route.metrics.distanceKm}`
+  );
+  const geom = route.legs[0].geometry;
+  assert.ok(geom.length >= 10, `expected detailed overland polyline, got ${geom.length} points`);
+  assert.equal(crossesOpenSea(geom[0], geom[geom.length - 1]), true);
+  assert.ok(geom.some(([lon, lat]) => lon < 118.5 && lat > 38.8), 'should detour west/north around Bohai Bay');
 });

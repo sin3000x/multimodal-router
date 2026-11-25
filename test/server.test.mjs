@@ -90,7 +90,7 @@ test('HTTP service endpoints, canonical caching across standard & legacy aliases
     assert.equal(graphLinks.graphVersion, health.graphVersion);
     assert.equal(graphLinks.sea.length, health.counts.marnetEdges);
     assert.equal(graphLinks.land.length, health.counts.landEdges);
-    assert.ok(graphLinks.land.every(({ coords }) => coords.length === 2 && coords.flat().every(Number.isFinite)));
+    assert.ok(graphLinks.land.every(({ coords }) => coords.length >= 2 && coords.flat().every(Number.isFinite)));
 
     // 3. Chokepoints
     const cpRes = await fetch(`${baseUrl}/v1/chokepoints`);

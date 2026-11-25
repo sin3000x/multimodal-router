@@ -1,5 +1,7 @@
 import { haversineKm } from './geo.mjs';
-import { scoreRoute } from './cost-model.mjs';
+import { borderPenalty, scoreRoute } from './cost-model.mjs';
+import { crossesOpenSea } from './land-mask.mjs';
+import { createRoadRouter } from './road-router.mjs';
 
 class MinHeap {
   constructor() {
@@ -43,6 +45,7 @@ class MinHeap {
 const ROAD_CIRCUITY = 1.25;
 
 export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGroups = {}) {
+  const { findRoadPath } = createRoadRouter(graph);
   const vertices = graph.marnet.vertices;
   const edges = graph.marnet.edges;
   const adjacency = Array.from({ length: vertices.length }, () => []);
@@ -145,6 +148,107 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
     };
   }
 
+  function portTierOf(port) {
+    return port.portTier ?? (port.isHub ? 2 : 3);
+  }
+
+  function gatewayRankScore(straightKm, port, isHomePort) {
+    const tier = portTierOf(port);
+    const tierBonus = tier === 1 ? 170 : tier === 2 ? 105 : port.isMajor ? 60 : 0;
+    return (
+      straightKm -
+      (isHomePort ? 220 : 0) -
+      tierBonus -
+      (port.isCuratedPort ? 35 : 0) -
+      (port.type === 'port' ? 20 : 0)
+    );
+  }
+
+  function findCorridorPorts(startNode, maxCorridorKm = 2400) {
+    const dist = new Map([[startNode.id, 0]]);
+    const prev = new Map();
+    const visited = new Set();
+    const heap = new MinHeap();
+    heap.push({ v: startNode.id, dist: 0 });
+    const reached = [];
+
+    while (heap.size > 0) {
+      const { v: u, dist: d } = heap.pop();
+      if (visited.has(u)) continue;
+      visited.add(u);
+      const uNode = nodeById.get(u);
+      if (
+        u !== startNode.id &&
+        (uNode?.type === 'port' || (uNode?.type === 'city' && uNode?.isCuratedPort)) &&
+        uNode.marnetVertexId != null
+      ) {
+        reached.push({ port: uNode, totalKm: +d.toFixed(1) });
+        continue;
+      }
+      if (d >= maxCorridorKm) continue;
+
+      for (const edge of landConnectionsByNode.get(u) ?? []) {
+        if (visited.has(edge.to)) continue;
+        const nd = d + edge.distanceKm;
+        if (nd <= maxCorridorKm && nd < (dist.get(edge.to) ?? Infinity)) {
+          dist.set(edge.to, nd);
+          prev.set(edge.to, { from: u, edge });
+          heap.push({ v: edge.to, dist: nd });
+        }
+      }
+    }
+
+    return reached.map(({ port, totalKm }) => {
+      const edgesPath = [];
+      let curr = port.id;
+      while (curr !== startNode.id) {
+        const step = prev.get(curr);
+        if (!step) break;
+        edgesPath.push(step.edge);
+        curr = step.from;
+      }
+      edgesPath.reverse();
+
+      let railKm = 0;
+      const drayageCoords = [];
+      const border = { days: 0, cost: 0, reliabilityDrop: 0 };
+      for (const edge of edgesPath) {
+        if (edge.mode === 'rail') railKm += edge.distanceKm;
+        const fn = nodeById.get(edge.from);
+        const tn = nodeById.get(edge.to);
+        if (edge.mode === 'road' && fn?.country && tn?.country && fn.country !== tn.country) {
+          const bp = borderPenalty(fn.country, tn.country);
+          border.days += bp.days;
+          border.cost += bp.cost;
+          border.reliabilityDrop += bp.reliabilityDrop;
+        }
+        const pts = edge.coords
+          ? edge.coords
+          : fn && tn
+            ? [[fn.lon, fn.lat], [tn.lon, tn.lat]]
+            : [];
+        for (let i = 0; i < pts.length; i++) {
+          if (drayageCoords.length > 0 && i === 0) continue;
+          drayageCoords.push(pts[i]);
+        }
+      }
+
+      const drayageMode = railKm >= totalKm * 0.5 ? 'rail' : 'road';
+      return {
+        port,
+        drayageKm: totalKm,
+        drayageMode,
+        viaCorridor: edgesPath.map((e) => e.corridor).filter(Boolean).join(' / ') || null,
+        drayageCoords: drayageCoords.length >= 2 ? drayageCoords : null,
+        border,
+        preferred: true,
+        isHomePort: false,
+        isRemoteAlternate: drayageMode !== 'rail' && totalKm > 60,
+        score: gatewayRankScore(totalKm, port, false) - (drayageMode === 'rail' ? 60 : 0),
+      };
+    });
+  }
+
   function selectGatewayPorts(node, { maxDistanceKm = 260, limit = 4 } = {}) {
     if (node.type === 'port' && node.marnetVertexId != null) {
       return [
@@ -169,20 +273,28 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
         (target?.type === 'port' || (target?.type === 'city' && target?.isCuratedPort)) &&
         target.marnetVertexId != null
       ) {
+        const isHomePort =
+          homePortIds.has(target.id) ||
+          (target.id === node.id && Boolean(target.isCuratedPort || target.isHub));
+        const straightKm = haversineKm(node.lon, node.lat, target.lon, target.lat);
         candidates.set(target.id, {
           port: target,
           drayageKm: edge.distanceKm,
           drayageMode: edge.mode,
           viaCorridor: edge.corridor,
+          drayageCoords: edge.coords ?? null,
+          border: borderPenalty(node.country, target.country),
           preferred: true,
-          isHomePort: homePortIds.has(target.id),
-          isRemoteAlternate: false,
+          isHomePort,
+          isRemoteAlternate: !isHomePort && edge.mode !== 'rail' && edge.distanceKm > 60,
+          isQualified: true,
+          score: gatewayRankScore(straightKm, target, isHomePort) - (edge.mode === 'rail' ? 40 : 0),
         });
       }
     }
 
     // 2. Nearby snapped maritime ports deduplicated by MARNET vertex
-    const nearby = [];
+    const pool = [...candidates.values()];
     for (const port of ports) {
       if (candidates.has(port.id)) continue;
       const d = haversineKm(node.lon, node.lat, port.lon, port.lat);
@@ -193,31 +305,31 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
         const isQualified = Boolean(
           isHomePort || port.isCuratedPort || port.isHub || port.isMajor
         );
-        const score =
-          d -
-          (isHomePort ? 220 : 0) -
-          (port.isHub ? 150 : 0) -
-          (port.isCuratedPort ? 120 : 0) -
-          (port.isMajor ? 80 : 0) -
-          (port.type === 'port' ? 20 : 0);
-        nearby.push({
+        const crossCountryPenalty =
+          node.country && port.country && node.country !== port.country ? 45 : 0;
+        const score = gatewayRankScore(d, port, isHomePort) + crossCountryPenalty;
+        pool.push({
           port,
           straightKm: +d.toFixed(1),
           drayageKm: port.id === node.id ? 0 : +(d * ROAD_CIRCUITY).toFixed(1),
+          drayageMode: 'road',
+          viaCorridor: null,
+          drayageCoords: null,
+          border: borderPenalty(node.country, port.country),
+          preferred: isQualified,
           isHomePort,
+          isRemoteAlternate: !isHomePort && d > 60,
           isQualified,
           score,
         });
       }
     }
-    nearby.sort((a, b) => a.score - b.score);
+    pool.sort((a, b) => a.score - b.score);
 
-    const seenVertices = new Set(
-      [...candidates.values()].map((c) => c.port.marnetVertexId)
-    );
-    const out = [...candidates.values()];
+    const seenVertices = new Set();
+    const out = [];
 
-    for (const item of nearby) {
+    for (const item of pool) {
       if (out.length >= limit) break;
       const vId = item.port.marnetVertexId;
       if (seenVertices.has(vId)) continue;
@@ -229,16 +341,35 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
       if (out.some((c) => c.preferred) && !item.isQualified) {
         continue;
       }
+      // Skip ports separated from the city by open sea (prevents over-water road drayage)
+      if (!item.drayageCoords && !item.isHomePort && crossesOpenSea([node.lon, node.lat], [item.port.lon, item.port.lat])) {
+        continue;
+      }
+      if (!item.drayageCoords && !item.isHomePort && item.straightKm >= 25 && graph.roadnet?.vertices?.length) {
+        if (node.roadVertexId != null && item.port.roadVertexId != null) {
+          if (graph.roadnet.vertices[node.roadVertexId].comp !== graph.roadnet.vertices[item.port.roadVertexId].comp) {
+            continue;
+          }
+          const rp = findRoadPath(node, item.port, { maxRoadKm: maxDistanceKm * 2.6, includeGeometry: true });
+          if (!rp) continue;
+          item.drayageKm = rp.distanceKm;
+          item.drayageCoords = rp.coords;
+          item.border = rp.border;
+        }
+      }
       seenVertices.add(vId);
-      out.push({
-        port: item.port,
-        drayageKm: item.drayageKm,
-        drayageMode: 'road',
-        viaCorridor: null,
-        preferred: item.isQualified,
-        isHomePort: item.isHomePort,
-        isRemoteAlternate: !item.isHomePort && item.straightKm > 60,
-      });
+      out.push(item);
+    }
+
+    // 3. Multi-hop corridor fallback for landlocked inland cities/hubs (e.g. Kampala -> Mombasa)
+    if (out.length === 0) {
+      const corridorPorts = findCorridorPorts(node, 2400).sort((a, b) => a.score - b.score);
+      for (const item of corridorPorts) {
+        if (out.length >= 2) break;
+        if (seenVertices.has(item.port.marnetVertexId)) continue;
+        seenVertices.add(item.port.marnetVertexId);
+        out.push(item);
+      }
     }
 
     // Fallback: if landlocked and no corridor/nearby port, widen search to 900 km major ports
@@ -250,12 +381,18 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
         if (d <= 900) fallback.push({ port, drayageKm: +d.toFixed(1) });
       }
       fallback.sort((a, b) => a.drayageKm - b.drayageKm);
-      for (const item of fallback.slice(0, 2)) {
+      const overland = fallback.filter(
+        (item) => !crossesOpenSea([node.lon, node.lat], [item.port.lon, item.port.lat])
+      );
+      const chosenFallback = overland.length ? overland : fallback;
+      for (const item of chosenFallback.slice(0, 2)) {
         out.push({
           port: item.port,
           drayageKm: +(item.drayageKm * ROAD_CIRCUITY).toFixed(1),
           drayageMode: 'road',
           viaCorridor: null,
+          drayageCoords: null,
+          border: borderPenalty(node.country, item.port.country),
           preferred: false,
           isHomePort: false,
           isRemoteAlternate: true,
@@ -280,13 +417,20 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
         corridor: og.viaCorridor || '集港短驳',
         distanceKm: og.drayageKm,
         ...(includeGeometry && {
-          geometry: [
-            [originNode.lon, originNode.lat],
-            [og.port.lon, og.port.lat],
-          ],
+          geometry: og.drayageCoords
+            ? [...og.drayageCoords]
+            : [
+                [originNode.lon, originNode.lat],
+                [og.port.lon, og.port.lat],
+              ],
         }),
       });
-      legOptions.push({ isRemoteAlternate: Boolean(og.isRemoteAlternate) });
+      legOptions.push({
+        isRemoteAlternate: Boolean(og.isRemoteAlternate),
+        borderDays: og.border?.days ?? 0,
+        borderCost: og.border?.cost ?? 0,
+        reliabilityDrop: og.border?.reliabilityDrop ?? 0,
+      });
     }
 
     legs.push({
@@ -307,7 +451,11 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
       }),
     });
     legOptions.push({
-      isSecondaryPort: dg.port.id !== destNode.id && !dg.port.isHub && !dg.isHomePort,
+      isSecondaryPort: portTierOf(dg.port) >= 3 && !dg.isHomePort && dg.port.id !== destNode.id,
+      originPortTier: portTierOf(og.port),
+      destPortTier: portTierOf(dg.port),
+      isOriginHomePort: Boolean(og.isHomePort || og.port.id === originNode.id),
+      isDestHomePort: Boolean(dg.isHomePort || dg.port.id === destNode.id),
     });
 
     if (dg.port.id !== destNode.id) {
@@ -321,13 +469,20 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
         corridor: dg.viaCorridor || '疏港短驳',
         distanceKm: dg.drayageKm,
         ...(includeGeometry && {
-          geometry: [
-            [dg.port.lon, dg.port.lat],
-            [destNode.lon, destNode.lat],
-          ],
+          geometry: dg.drayageCoords
+            ? [...dg.drayageCoords].reverse()
+            : [
+                [dg.port.lon, dg.port.lat],
+                [destNode.lon, destNode.lat],
+              ],
         }),
       });
-      legOptions.push({ isRemoteAlternate: Boolean(dg.isRemoteAlternate) });
+      legOptions.push({
+        isRemoteAlternate: Boolean(dg.isRemoteAlternate),
+        borderDays: dg.border?.days ?? 0,
+        borderCost: dg.border?.cost ?? 0,
+        reliabilityDrop: dg.border?.reliabilityDrop ?? 0,
+      });
     }
 
     const chokepoints = pathResult.passages.map((cpId) => {

@@ -1,9 +1,12 @@
 import { haversineKm } from './geo.mjs';
-import { scoreRoute } from './cost-model.mjs';
+import { borderPenalty, scoreRoute } from './cost-model.mjs';
+import { crossesOpenSea } from './land-mask.mjs';
+import { createRoadRouter } from './road-router.mjs';
 
 export function createLandRouter(graph) {
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
   const adj = new Map();
+  const { findRoadPath } = createRoadRouter(graph);
 
   for (const edge of graph.landEdges ?? []) {
     if (!adj.has(edge.from)) adj.set(edge.from, []);
@@ -16,6 +19,7 @@ export function createLandRouter(graph) {
         baseId: edge.id,
         from: edge.to,
         to: edge.from,
+        ...(edge.coords ? { coords: [...edge.coords].reverse() } : {}),
       });
     }
   }
@@ -67,6 +71,7 @@ export function createLandRouter(graph) {
 
     // Compress consecutive edges of the same mode/corridor group into readable legs, or keep distinct corridor legs
     const legs = [];
+    const legOptions = [];
     const nodeSequence = [originNode.id];
     const chokepoints = [];
     const seenCp = new Set();
@@ -88,14 +93,24 @@ export function createLandRouter(graph) {
         });
       }
 
+      const bp =
+        edge.mode === 'road' && fromNode?.country && toNode?.country && fromNode.country !== toNode.country
+          ? borderPenalty(fromNode.country, toNode.country)
+          : { days: 0, cost: 0, reliabilityDrop: 0 };
+
       const prevLeg = legs[legs.length - 1];
       if (prevLeg && prevLeg.mode === edge.mode && prevLeg.corridor === edge.corridor) {
         prevLeg.to = edge.to;
         prevLeg.toName = toNode?.name_zh || toNode?.name_en || edge.to;
         prevLeg.distanceKm = +(prevLeg.distanceKm + edge.distanceKm).toFixed(1);
         if (includeGeometry && toNode) {
-          prevLeg.geometry.push([toNode.lon, toNode.lat]);
+          const appendPts = edge.coords ? edge.coords.slice(1) : [[toNode.lon, toNode.lat]];
+          prevLeg.geometry.push(...appendPts);
         }
+        const prevOpt = legOptions[legOptions.length - 1];
+        prevOpt.borderDays += bp.days;
+        prevOpt.borderCost += bp.cost;
+        prevOpt.reliabilityDrop += bp.reliabilityDrop;
       } else {
         legs.push({
           kind: edge.mode === 'road' && hasRail ? 'drayage' : 'trunk',
@@ -108,16 +123,23 @@ export function createLandRouter(graph) {
           hasFerry: edge.mode === 'sea',
           distanceKm: +edge.distanceKm.toFixed(1),
           ...(includeGeometry && fromNode && toNode && {
-            geometry: [
-              [fromNode.lon, fromNode.lat],
-              [toNode.lon, toNode.lat],
-            ],
+            geometry: edge.coords
+              ? [...edge.coords]
+              : [
+                  [fromNode.lon, fromNode.lat],
+                  [toNode.lon, toNode.lat],
+                ],
           }),
+        });
+        legOptions.push({
+          borderDays: bp.days,
+          borderCost: bp.cost,
+          reliabilityDrop: bp.reliabilityDrop,
         });
       }
     }
 
-    const metrics = scoreRoute(primaryMode, legs, { chokepointCount: chokepoints.length });
+    const metrics = scoreRoute(primaryMode, legs, { chokepointCount: chokepoints.length, legOptions });
     const borders = chokepoints.map((c) => c.id).sort().join(',');
     const signature = `${primaryMode}:${originNode.id}:${destNode.id}:${borders}`;
 
@@ -199,9 +221,64 @@ export function createLandRouter(graph) {
       }
     }
 
-    // 2. Direct short-haul regional road if within 350 km and not already covered
+    // 2. Global roadnet A* search if no curated road corridor was found
     const directKm = haversineKm(originNode.lon, originNode.lat, destNode.lon, destNode.lat);
-    if (directKm <= 350 && results.size === 0) {
+    const hasRoadResult = [...results.values()].some((r) => r.mode === 'road');
+    if (!hasRoadResult) {
+      const sameCountry = Boolean(originNode.country && originNode.country === destNode.country);
+      const maxAllowedKm = sameCountry
+        ? Math.min(6000, Math.max(2200, directKm * 14))
+        : Math.min(5000, Math.max(900, directKm * 7.5));
+      const roadPath = findRoadPath(originNode, destNode, {
+        maxRoadKm: maxAllowedKm,
+        includeGeometry,
+      });
+      if (roadPath && roadPath.distanceKm <= maxAllowedKm) {
+        const corridor = sameCountry ? '干线公路网' : '跨国干线公路';
+        const legs = [
+          {
+            kind: 'trunk',
+            mode: 'road',
+            from: originNode.id,
+            fromName: originNode.name_zh || originNode.name_en,
+            to: destNode.id,
+            toName: destNode.name_zh || destNode.name_en,
+            corridor,
+            distanceKm: roadPath.distanceKm,
+            ...(includeGeometry && roadPath.coords && { geometry: roadPath.coords }),
+          },
+        ];
+        const legOptions = [
+          {
+            borderDays: roadPath.border?.days ?? 0,
+            borderCost: roadPath.border?.cost ?? 0,
+            reliabilityDrop: roadPath.border?.reliabilityDrop ?? 0,
+          },
+        ];
+        const metrics = scoreRoute('road', legs, { legOptions });
+        const sig = `road:${originNode.id}:${destNode.id}:roadnet`;
+        results.set(sig, {
+          mode: 'road',
+          modeLabel: '公路',
+          likelihood: 'primary',
+          originGateway: { id: originNode.id, name: originNode.name_zh || originNode.name_en, code: originNode.code ?? null },
+          destGateway: { id: destNode.id, name: destNode.name_zh || destNode.name_en, code: destNode.code ?? null },
+          chokepoints: [],
+          nodeSequence: [originNode.id, destNode.id],
+          legs,
+          metrics,
+          signature: sig,
+        });
+      }
+    }
+
+    // 3. Direct short-haul regional road fallback when roadnet is unavailable or endpoints are unsnapped
+    if (
+      directKm <= 350 &&
+      results.size === 0 &&
+      (!graph.roadnet || (originNode.roadVertexId == null && destNode.roadVertexId == null)) &&
+      !crossesOpenSea([originNode.lon, originNode.lat], [destNode.lon, destNode.lat])
+    ) {
       const legs = [
         {
           kind: 'trunk',

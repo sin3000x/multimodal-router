@@ -3,12 +3,14 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decimateCoords, haversineKm, normalizeLon } from '../src/engine/geo.mjs';
+import { crossesOpenSea } from '../src/engine/land-mask.mjs';
 import endpointNamesZh from '../data/curated/endpoint-names-zh.json' with { type: 'json' };
 import publicNodeNamesZh from '../data/curated/public-node-names-zh.json' with { type: 'json' };
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const RAW_DIR = join(ROOT_DIR, 'data', 'raw');
 const CURATED_DIR = join(ROOT_DIR, 'data', 'curated');
+const PUBLIC_DIR = join(ROOT_DIR, 'public');
 const COMPILED_DIR = join(ROOT_DIR, 'data', 'compiled');
 
 const MAJOR_AIR_CARGO_HUBS = new Set([
@@ -17,15 +19,31 @@ const MAJOR_AIR_CARGO_HUBS = new Set([
   'ADD', 'JNB', 'GRU', 'MEX', 'RUH',
 ]);
 
-const MAJOR_SEA_HUB_CODES = new Set([
-  'CNYTN', 'CNSHK', 'CNNSA', 'CNCWN', 'CNMWN', 'CNDCB', 'HKHKG', 'SGSIN',
-  'MYPKG', 'MYTPP', 'AEJEA', 'AEKHL', 'OMSLL', 'OMSOH', 'AEFJR', 'AEKLF',
-  'SADMM', 'SAJED', 'DJJIB', 'EGPSD', 'EGSUE', 'EGALY', 'TRIST', 'TRMER',
-  'GRPIR', 'SIKOP', 'NLRTM', 'DEHAM', 'GBFXT', 'GBLGP', 'GBSOU', 'ESALG',
-  'ESVLC', 'ESBCN', 'ITGOA', 'PLGDN', 'ZADUR', 'ZACPT', 'MXZLO', 'MXLZC',
-  'MXVER', 'COBUN', 'COCTG', 'CLSAI', 'CLVAP', 'PECLL', 'PECHY', 'BRSSZ',
-  'JPYOK', 'THLCH', 'IDTPP', 'PHMNL', 'RUVYP', 'RULED', 'RUNVS', 'QAHMD',
+const TIER1_SEA_HUB_CODES = new Set([
+  'CNYTN', 'CNSHK', 'CNNSA', 'CNYAN', 'CNZOS', 'CNXIP', 'HKHKG', 'SGSIN',
+  'MYPKG', 'MYTPP', 'JPYOK', 'THLCH', 'IDTPP', 'PHMNL', 'AEJEA', 'SAJED',
+  'SADMM', 'EGPSD', 'DJJIB', 'MATNG', 'ZADUR', 'NLRTM', 'DEHAM', 'BEANR',
+  'GBFXT', 'GBLGP', 'ESALG', 'ESVLC', 'ESBCN', 'GRPIR', 'ITGOA', 'PLGDN',
+  'MXZLO', 'MXLZC', 'COCTG', 'CLSAI', 'PECLL', 'BRSSZ',
 ]);
+
+const TIER2_SEA_HUB_CODES = new Set([
+  'CNCWN', 'CNMWN', 'CNDCB', 'CNTGU', 'CNHUA', 'AEKHL', 'AEKLF', 'AEFJR',
+  'OMSOH', 'OMSLL', 'OMDQM', 'QAHMD', 'KWSAA', 'KWSWK', 'BHBAH', 'SAKAC',
+  'SAYNB', 'SAJUB', 'JOAQJ', 'EGSUE', 'EGSOK', 'EGALY', 'ILHFA', 'ILASH',
+  'LBBEY', 'SDPZU', 'KEMBA', 'TZDAR', 'ZACPT', 'NAWVB', 'MACAS', 'GBSOU',
+  'SIKOP', 'ITGIT', 'TRIST', 'TRMER', 'RUVYP', 'RULED', 'RUNVS', 'MXVER',
+  'COBUN', 'CLVAP', 'PECHY',
+]);
+
+const MAJOR_SEA_HUB_CODES = new Set([...TIER1_SEA_HUB_CODES, ...TIER2_SEA_HUB_CODES]);
+
+function computePortTier(code, isCuratedPort) {
+  const upper = code ? code.toUpperCase() : '';
+  if (TIER1_SEA_HUB_CODES.has(upper)) return 1;
+  if (TIER2_SEA_HUB_CODES.has(upper) || isCuratedPort) return 2;
+  return 3;
+}
 
 // Official 5-char UN/LOCODE mapping for curated cities
 const CURATED_CITY_UNLOCODE = {
@@ -272,6 +290,270 @@ function buildMarnetGraph(marnetGeo, passageMap) {
   return { vertices, edges, adjacency, componentSizes };
 }
 
+const ISO3_FALLBACK = {
+  CHN: 'CN', USA: 'US', CAN: 'CA', MEX: 'MX', RUS: 'RU', ARE: 'AE', SAU: 'SA',
+  OMN: 'OM', QAT: 'QA', KWT: 'KW', BHR: 'BH', IRN: 'IR', IRQ: 'IQ', JOR: 'JO',
+  ISR: 'IL', EGY: 'EG', DJI: 'DJ', ETH: 'ET', KEN: 'KE', UGA: 'UG', TZA: 'TZ',
+  ZMB: 'ZM', ZAF: 'ZA', GBR: 'GB', FRA: 'FR', DEU: 'DE', NLD: 'NL',
+};
+
+function round3(val) {
+  const r = +Number(val).toFixed(3);
+  return Object.is(r, -0) ? 0 : r;
+}
+
+function buildRoadGraph(roadsGeo, iso3ToIso2) {
+  const normPt = ([lon, lat]) => {
+    let nLon = round3(normalizeLon(lon));
+    if (nLon >= 180) nLon = -180;
+    return [nLon, round3(lat)];
+  };
+  const ptKey = ([lon, lat]) => `${lon},${lat}`;
+
+  const rawLines = [];
+  for (const feature of roadsGeo.features ?? []) {
+    const props = feature.properties ?? {};
+    if (props.featurecla !== 'Road') continue;
+    if (/ferry/i.test(props.type ?? '') || props.level === 'U/C') continue;
+    const rank = Number(props.scalerank ?? 99);
+    if (props.continent === 'North America' && rank > 6) continue;
+    if (props.continent === 'Europe' && rank > 7) continue;
+
+    const a3 = (props.sov_a3 || props.adm0_a3 || '').toUpperCase();
+    const cc = iso3ToIso2.get(a3) ?? ISO3_FALLBACK[a3] ?? '';
+
+    const geom = feature.geometry;
+    if (!geom) continue;
+    const lsList =
+      geom.type === 'LineString'
+        ? [geom.coordinates]
+        : geom.type === 'MultiLineString'
+          ? geom.coordinates
+          : [];
+    for (const rawCoords of lsList) {
+      const coords = [];
+      for (const pt of rawCoords ?? []) {
+        if (!Number.isFinite(pt?.[0]) || !Number.isFinite(pt?.[1])) continue;
+        const p = normPt(pt);
+        const prev = coords[coords.length - 1];
+        if (!prev || prev[0] !== p[0] || prev[1] !== p[1]) coords.push(p);
+      }
+      if (coords.length >= 2) rawLines.push({ coords, cc });
+    }
+  }
+
+  const lineTouchCount = new Map();
+  const cellDeg = 0.05;
+  const numCols = Math.ceil(360 / cellDeg);
+  const grid = new Map();
+
+  for (let li = 0; li < rawLines.length; li++) {
+    const seen = new Set();
+    for (const p of rawLines[li].coords) {
+      const k = ptKey(p);
+      if (!seen.has(k)) {
+        seen.add(k);
+        lineTouchCount.set(k, (lineTouchCount.get(k) || 0) + 1);
+      }
+      const cx = Math.floor((p[0] + 180) / cellDeg);
+      const cy = Math.floor((p[1] + 90) / cellDeg);
+      const gk = `${cx},${cy}`;
+      if (!grid.has(gk)) grid.set(gk, []);
+      grid.get(gk).push({ p, k, li });
+    }
+  }
+
+  // Weld dangling endpoints to nearby points on other lines (<= 3.5 km, overland)
+  for (let li = 0; li < rawLines.length; li++) {
+    const coords = rawLines[li].coords;
+    for (const isEnd of [false, true]) {
+      const p = isEnd ? coords[coords.length - 1] : coords[0];
+      const pk = ptKey(p);
+      if ((lineTouchCount.get(pk) || 0) !== 1) continue;
+
+      const cx = Math.floor((p[0] + 180) / cellDeg);
+      const cy = Math.floor((p[1] + 90) / cellDeg);
+      let best = null;
+      let bestKm = 3.5;
+
+      for (let dx = -1; dx <= 1; dx++) {
+        const wx = ((cx + dx) % numCols + numCols) % numCols;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (const cand of grid.get(`${wx},${cy + dy}`) ?? []) {
+            if (cand.li === li || cand.k === pk) continue;
+            const d = haversineKm(p[0], p[1], cand.p[0], cand.p[1]);
+            if (d <= bestKm && !crossesOpenSea(p, cand.p)) {
+              bestKm = d;
+              best = cand;
+            }
+          }
+        }
+      }
+      if (best) {
+        if (isEnd) coords.push(best.p);
+        else coords.unshift(best.p);
+        lineTouchCount.set(best.k, (lineTouchCount.get(best.k) || 0) + 1);
+      }
+    }
+  }
+
+  const vIndexByKey = new Map();
+  const rawVertices = [];
+  function getOrCreateV(p) {
+    const k = ptKey(p);
+    const existing = vIndexByKey.get(k);
+    if (existing !== undefined) return existing;
+    const id = rawVertices.length;
+    rawVertices.push({ id, lon: p[0], lat: p[1] });
+    vIndexByKey.set(k, id);
+    return id;
+  }
+
+  const edgeMap = new Map();
+  for (const { coords, cc } of rawLines) {
+    let segStart = 0;
+    for (let i = 1; i < coords.length; i++) {
+      const isJunction = i === coords.length - 1 || (lineTouchCount.get(ptKey(coords[i])) || 0) > 1;
+      if (!isJunction) continue;
+
+      const sub = coords.slice(segStart, i + 1);
+      segStart = i;
+      const u = getOrCreateV(sub[0]);
+      const v = getOrCreateV(sub[sub.length - 1]);
+      if (u === v) continue;
+
+      let distanceKm = 0;
+      for (let j = 1; j < sub.length; j++) {
+        distanceKm += haversineKm(sub[j - 1][0], sub[j - 1][1], sub[j][0], sub[j][1]);
+      }
+
+      const key = u < v ? `${u}:${v}` : `${v}:${u}`;
+      const existing = edgeMap.get(key);
+      if (!existing || distanceKm < existing.distanceKm) {
+        edgeMap.set(key, {
+          u,
+          v,
+          distanceKm: +distanceKm.toFixed(2),
+          cc,
+          coords: sub,
+          alive: true,
+        });
+      }
+    }
+  }
+
+  // Degree-2 chain contraction (same country code)
+  const rawEdges = [...edgeMap.values()];
+  const adj = Array.from({ length: rawVertices.length }, () => []);
+  for (let ei = 0; ei < rawEdges.length; ei++) {
+    adj[rawEdges[ei].u].push(ei);
+    adj[rawEdges[ei].v].push(ei);
+  }
+
+  for (let w = 0; w < rawVertices.length; w++) {
+    const inc = adj[w].filter((ei) => rawEdges[ei].alive);
+    if (inc.length !== 2) continue;
+    const [e1Idx, e2Idx] = inc;
+    const e1 = rawEdges[e1Idx];
+    const e2 = rawEdges[e2Idx];
+    if (e1.cc !== e2.cc) continue;
+
+    const a = e1.u === w ? e1.v : e1.u;
+    const b = e2.u === w ? e2.v : e2.u;
+    if (a === b) continue;
+
+    const c1 = e1.v === w ? e1.coords : [...e1.coords].reverse();
+    const c2 = e2.u === w ? e2.coords : [...e2.coords].reverse();
+    const mergedCoords = [...c1, ...c2.slice(1)];
+    const mergedDist = +(e1.distanceKm + e2.distanceKm).toFixed(2);
+
+    e1.alive = false;
+    e2.alive = false;
+
+    const newIdx = rawEdges.length;
+    rawEdges.push({
+      u: a,
+      v: b,
+      distanceKm: mergedDist,
+      cc: e1.cc,
+      coords: mergedCoords,
+      alive: true,
+    });
+    adj[a] = adj[a].filter((ei) => ei !== e1Idx && ei !== e2Idx);
+    adj[b] = adj[b].filter((ei) => ei !== e1Idx && ei !== e2Idx);
+    adj[a].push(newIdx);
+    adj[b].push(newIdx);
+  }
+
+  // Deduplicate parallel edges after contraction and compact vertices/edges
+  const bestAfter = new Map();
+  for (const e of rawEdges) {
+    if (!e.alive) continue;
+    const key = e.u < e.v ? `${e.u}:${e.v}` : `${e.v}:${e.u}`;
+    const prev = bestAfter.get(key);
+    if (!prev || e.distanceKm < prev.distanceKm) bestAfter.set(key, e);
+  }
+
+  const oldToNew = new Map();
+  const vertices = [];
+  function remap(oldId) {
+    if (oldToNew.has(oldId)) return oldToNew.get(oldId);
+    const id = vertices.length;
+    const ov = rawVertices[oldId];
+    vertices.push({ id, lon: ov.lon, lat: ov.lat, comp: -1 });
+    oldToNew.set(oldId, id);
+    return id;
+  }
+
+  const edges = [];
+  for (const e of bestAfter.values()) {
+    const u = remap(e.u);
+    const v = remap(e.v);
+    if (u === v) continue;
+    const maxPts = Math.min(12, Math.max(2, Math.ceil(e.distanceKm / 45)));
+    edges.push({
+      u,
+      v,
+      distanceKm: e.distanceKm,
+      cc: e.cc,
+      coords: decimateCoords(e.coords, maxPts),
+    });
+  }
+
+  // Connected components sorted largest first (comp = 0 is largest)
+  const compAdj = Array.from({ length: vertices.length }, () => []);
+  for (const e of edges) {
+    compAdj[e.u].push(e.v);
+    compAdj[e.v].push(e.u);
+  }
+  const rawComps = [];
+  const visited = new Uint8Array(vertices.length);
+  for (let i = 0; i < vertices.length; i++) {
+    if (visited[i]) continue;
+    const members = [];
+    const queue = [i];
+    visited[i] = 1;
+    while (queue.length) {
+      const curr = queue.pop();
+      members.push(curr);
+      for (const next of compAdj[curr]) {
+        if (!visited[next]) {
+          visited[next] = 1;
+          queue.push(next);
+        }
+      }
+    }
+    rawComps.push(members);
+  }
+  rawComps.sort((a, b) => b.length - a.length);
+  const componentSizes = rawComps.map((c) => c.length);
+  for (let cid = 0; cid < rawComps.length; cid++) {
+    for (const vid of rawComps[cid]) vertices[vid].comp = cid;
+  }
+
+  return { vertices, edges, componentSizes };
+}
+
 function buildSpatialGrid(vertices, cellDeg = 2) {
   const buckets = new Map();
   for (const v of vertices) {
@@ -283,12 +565,11 @@ function buildSpatialGrid(vertices, cellDeg = 2) {
   }
   const numCols = Math.ceil(360 / cellDeg);
 
-  return function snapToMarnet(lon, lat, maxKm = 220) {
+  return function snapToGraph(lon, lat, maxKm = 220, { checkOverland = false } = {}) {
     const nLon = normalizeLon(lon);
     const cx = Math.floor((nLon + 180) / cellDeg);
     const cy = Math.floor((lat + 90) / cellDeg);
-    let best = null;
-    let bestKm = Infinity;
+    const candidates = [];
 
     for (const radius of [1, 2, 4, 6]) {
       for (let dx = -radius; dx <= radius; dx++) {
@@ -298,18 +579,24 @@ function buildSpatialGrid(vertices, cellDeg = 2) {
           if (!list) continue;
           for (const v of list) {
             const d = haversineKm(nLon, lat, v.lon, v.lat);
-            if (d < bestKm) {
-              bestKm = d;
-              best = v;
-            }
+            if (d <= maxKm) candidates.push({ v, d });
           }
         }
       }
-      if (best && bestKm <= maxKm) break;
+      if (candidates.length > 0) break;
     }
 
-    if (!best || bestKm > maxKm) return null;
-    return { marnetVertexId: best.id, snapDistanceKm: +bestKm.toFixed(2) };
+    if (!candidates.length) return null;
+    candidates.sort((a, b) => a.d - b.d);
+    if (!checkOverland) {
+      return { marnetVertexId: candidates[0].v.id, snapDistanceKm: +candidates[0].d.toFixed(2) };
+    }
+    for (const { v, d } of candidates) {
+      if (!crossesOpenSea([nLon, lat], [v.lon, v.lat])) {
+        return { vertexId: v.id, snapDistanceKm: +d.toFixed(2) };
+      }
+    }
+    return null;
   };
 }
 
@@ -339,21 +626,32 @@ function canonicalizeSeedNode(seed) {
 }
 
 async function main() {
-  const [marnetRaw, portsRaw, airportsCsv, chokepointsCfg, corridorsCfg, seedNodes] =
+  const [marnetRaw, portsRaw, airportsCsv, roadsRaw, countriesRaw, chokepointsCfg, corridorsCfg, seedNodes] =
     await Promise.all([
       readFile(join(RAW_DIR, 'marnet_searoute.geojson'), 'utf8').then(JSON.parse),
       readFile(join(RAW_DIR, 'ports.geojson'), 'utf8').then(JSON.parse),
       readFile(join(RAW_DIR, 'airports.csv'), 'utf8'),
+      readFile(join(RAW_DIR, 'ne_10m_roads.geojson'), 'utf8').then(JSON.parse),
+      readFile(join(PUBLIC_DIR, 'countries.geojson'), 'utf8').then(JSON.parse),
       readFile(join(CURATED_DIR, 'chokepoints.json'), 'utf8').then(JSON.parse),
       readFile(join(CURATED_DIR, 'rail-land-corridors.json'), 'utf8').then(JSON.parse),
       readFile(join(CURATED_DIR, 'seed-nodes.json'), 'utf8').then(JSON.parse),
     ]);
+
+  const iso3ToIso2 = new Map();
+  for (const f of countriesRaw.features ?? []) {
+    const a3 = f.properties?.['ISO3166-1-Alpha-3'];
+    const a2 = f.properties?.['ISO3166-1-Alpha-2'];
+    if (a3 && a2 && a2 !== '-99') iso3ToIso2.set(a3.toUpperCase(), a2.toUpperCase());
+  }
 
   const passageMap = new Map(
     chokepointsCfg.passages.map((cp) => [cp.marnetPassage, cp.id])
   );
   const marnet = buildMarnetGraph(marnetRaw, passageMap);
   const snapToMarnet = buildSpatialGrid(marnet.vertices);
+  const roadnet = buildRoadGraph(roadsRaw, iso3ToIso2);
+  const snapToRoadnet = buildSpatialGrid(roadnet.vertices, 1.5);
 
   const nodesById = new Map();
   const portByCode = new Map();
@@ -393,6 +691,9 @@ async function main() {
         verified: Boolean(existing.verified || node.verified),
         isMajor: Boolean(existing.isMajor || node.isMajor),
         isHub: Boolean(existing.isHub || node.isHub),
+        ...(existing.portTier != null || node.portTier != null
+          ? { portTier: Math.min(existing.portTier ?? 3, node.portTier ?? 3) }
+          : {}),
         marnetVertexId: existing.marnetVertexId ?? node.marnetVertexId,
         snapDistanceKm: existing.snapDistanceKm ?? node.snapDistanceKm,
         aliases: [...new Set([...(existing.aliases ?? []), ...(node.aliases ?? [])])],
@@ -467,6 +768,7 @@ async function main() {
         node.isHub = true;
       }
       node.isCuratedPort = true;
+      node.portTier = computePortTier(node.code, node.isCuratedPort);
       if (node.verified || MAJOR_SEA_HUB_CODES.has(node.code)) node.isMajor = true;
     }
     if (node.type === 'airport' || node.type === 'hub_airport') {
@@ -557,6 +859,7 @@ async function main() {
       snapDistanceKm: snap.snapDistanceKm,
       isMajor: props.t === 1 || MAJOR_SEA_HUB_CODES.has(locode),
       isHub: MAJOR_SEA_HUB_CODES.has(locode),
+      portTier: computePortTier(locode, false),
       curated: false,
     });
   }
@@ -594,7 +897,7 @@ async function main() {
     });
   }
 
-  // 6. Build curated land/rail corridor edges with Haversine distance
+  // 6. Build curated land/rail corridor edges with Haversine distance (supports optional viaCoords)
   const landEdges = [];
   for (const c of corridorsCfg.corridors) {
     const u = nodesById.get(c.from);
@@ -602,7 +905,15 @@ async function main() {
     if (!u || !v) {
       throw new Error(`Invalid land corridor ${c.id}: missing ${!u ? c.from : c.to}`);
     }
-    const distanceKm = +haversineKm(u.lon, u.lat, v.lon, v.lat).toFixed(2);
+    const via = Array.isArray(c.viaCoords)
+      ? c.viaCoords.map(([lon, lat]) => [normalizeLon(lon), lat])
+      : [];
+    const poly = [[u.lon, u.lat], ...via, [v.lon, v.lat]];
+    let sumKm = 0;
+    for (let i = 1; i < poly.length; i++) {
+      sumKm += haversineKm(poly[i - 1][0], poly[i - 1][1], poly[i][0], poly[i][1]);
+    }
+    const distanceKm = +sumKm.toFixed(2);
     landEdges.push({
       id: c.id,
       from: c.from,
@@ -610,6 +921,7 @@ async function main() {
       mode: c.mode,
       corridor: c.corridor,
       distanceKm,
+      ...(via.length ? { coords: poly } : {}),
       bidirectional: c.bidirectional !== false,
     });
   }
@@ -624,6 +936,18 @@ async function main() {
     } else {
       missingChineseNames.push(`${node.id} (${node.name_en})`);
     }
+
+    if (
+      !['country', 'chokepoint', 'airspace', 'sea_area'].includes(node.type) &&
+      Number.isFinite(node.lon) &&
+      Number.isFinite(node.lat)
+    ) {
+      const roadSnap = snapToRoadnet(node.lon, node.lat, 90, { checkOverland: true });
+      if (roadSnap) {
+        node.roadVertexId = roadSnap.vertexId;
+        node.roadSnapKm = roadSnap.snapDistanceKm;
+      }
+    }
   }
   if (missingChineseNames.length) {
     throw new Error(`Missing Chinese node names:\n${missingChineseNames.join('\n')}`);
@@ -636,16 +960,21 @@ async function main() {
       vertices: marnet.vertices,
       edges: marnet.edges,
     },
+    roadnet: {
+      vertices: roadnet.vertices,
+      edges: roadnet.edges,
+    },
     landEdges,
   };
 
   const payloadJson = JSON.stringify(payload);
   const graphVersion = createHash('sha256').update(payloadJson).digest('hex').slice(0, 12);
 
-  const [marnetStat, portsStat, airportsStat] = await Promise.all([
+  const [marnetStat, portsStat, airportsStat, roadsStat] = await Promise.all([
     stat(join(RAW_DIR, 'marnet_searoute.geojson')),
     stat(join(RAW_DIR, 'ports.geojson')),
     stat(join(RAW_DIR, 'airports.csv')),
+    stat(join(RAW_DIR, 'ne_10m_roads.geojson')),
   ]);
 
   const counts = {
@@ -658,6 +987,9 @@ async function main() {
     marnetVertices: marnet.vertices.length,
     marnetEdges: marnet.edges.length,
     marnetComponents: marnet.componentSizes.slice(0, 5),
+    roadnetVertices: roadnet.vertices.length,
+    roadnetEdges: roadnet.edges.length,
+    roadnetComponents: roadnet.componentSizes.slice(0, 5),
     landEdges: landEdges.length,
     publicPortsLoaded,
     publicPortsSnapped,
@@ -676,6 +1008,7 @@ async function main() {
       marnet_searoute: { bytes: marnetStat.size, mtime: marnetStat.mtime.toISOString() },
       ports: { bytes: portsStat.size, mtime: portsStat.mtime.toISOString() },
       airports: { bytes: airportsStat.size, mtime: airportsStat.mtime.toISOString() },
+      ne_10m_roads: { bytes: roadsStat.size, mtime: roadsStat.mtime.toISOString() },
     },
     counts,
   };

@@ -1,5 +1,6 @@
 import { greatCircleIntersectsBoxes, greatCirclePoints, haversineKm } from './geo.mjs';
-import { scoreRoute } from './cost-model.mjs';
+import { borderPenalty, scoreRoute } from './cost-model.mjs';
+import { crossesOpenSea } from './land-mask.mjs';
 
 export function createAirRouter(graph) {
   const airports = graph.nodes.filter(
@@ -22,7 +23,11 @@ export function createAirRouter(graph) {
       }
     }
     candidates.sort((a, b) => a.rank - b.rank);
-    return candidates.slice(0, limit).map(({ airport, drayageKm }) => ({ airport, drayageKm }));
+    const overland = candidates.filter(
+      ({ airport }) => !crossesOpenSea([node.lon, node.lat], [airport.lon, airport.lat])
+    );
+    const chosen = overland.length ? overland : candidates;
+    return chosen.slice(0, limit).map(({ airport, drayageKm }) => ({ airport, drayageKm }));
   }
 
   function crossedAirspaces(a, b) {
@@ -37,7 +42,9 @@ export function createAirRouter(graph) {
 
   function buildAirCandidate(originNode, destNode, oa, da, flightSegments, { includeGeometry, isPrimary }) {
     const legs = [];
+    const legOptions = [];
     if (oa.airport.id !== originNode.id && oa.drayageKm > 1) {
+      const bp = borderPenalty(originNode.country, oa.airport.country);
       legs.push({
         kind: 'drayage',
         mode: 'road',
@@ -54,6 +61,7 @@ export function createAirRouter(graph) {
           ],
         }),
       });
+      legOptions.push({ borderDays: bp.days, borderCost: bp.cost, reliabilityDrop: bp.reliabilityDrop });
     }
 
     const crossedIds = new Set();
@@ -72,9 +80,11 @@ export function createAirRouter(graph) {
           geometry: greatCirclePoints([seg.from.lon, seg.from.lat], [seg.to.lon, seg.to.lat], 18),
         }),
       });
+      legOptions.push({});
     }
 
     if (da.airport.id !== destNode.id && da.drayageKm > 1) {
+      const bp = borderPenalty(da.airport.country, destNode.country);
       legs.push({
         kind: 'drayage',
         mode: 'road',
@@ -91,6 +101,7 @@ export function createAirRouter(graph) {
           ],
         }),
       });
+      legOptions.push({ borderDays: bp.days, borderCost: bp.cost, reliabilityDrop: bp.reliabilityDrop });
     }
 
     const chokepoints = [...crossedIds].map((id) => {
@@ -115,7 +126,7 @@ export function createAirRouter(graph) {
       nodeSequence.push(destNode.id);
     }
 
-    const metrics = scoreRoute('air', legs, { chokepointCount: chokepoints.length });
+    const metrics = scoreRoute('air', legs, { chokepointCount: chokepoints.length, legOptions });
     const viaHubNode = flightSegments.length > 1 ? flightSegments[0].to : null;
     const signature = `air:${oa.airport.id}:${viaHubNode?.id ?? 'DIRECT'}:${da.airport.id}`;
 

@@ -9,3 +9,13 @@ export const GRAPH_ZOOM_INPUT = {
   buttonFactor: 1.8,
   doubleClickFactor: 2,
 };
+
+export function getLegStrokeStyle(route, leg, tokens) {
+  if (route?.compareRole === 'baseline-affected') {
+    return { color: tokens.baseline, dash: [8, 5] };
+  }
+  const mode = leg?.mode || route?.mode || 'sea';
+  const color = tokens.modes[mode] || tokens.modes[route?.mode] || tokens.modes.sea;
+  const dash = mode === 'air' ? [6, 4] : mode === 'rail' ? [3, 3.5] : [];
+  return { color, dash };
+}

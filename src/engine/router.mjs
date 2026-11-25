@@ -39,6 +39,7 @@ export function createRouter(compiledGraph) {
         ...edge,
         from: edge.to,
         to: edge.from,
+        ...(edge.coords ? { coords: [...edge.coords].reverse() } : {}),
       });
     }
   }

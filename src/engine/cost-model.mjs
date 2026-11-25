@@ -43,9 +43,37 @@ export const MODE_PROFILES = {
   },
 };
 
+export const GCC_COUNTRIES = new Set(['AE', 'SA', 'QA', 'KW', 'BH', 'OM']);
+
+export function borderPenalty(fromCountry, toCountry) {
+  if (!fromCountry || !toCountry || fromCountry === toCountry) {
+    return { days: 0, cost: 0, reliabilityDrop: 0 };
+  }
+  if (
+    (fromCountry === 'CN' && toCountry === 'HK') ||
+    (fromCountry === 'HK' && toCountry === 'CN')
+  ) {
+    return { days: 0.35, cost: 0.4, reliabilityDrop: 0.01 };
+  }
+  if (GCC_COUNTRIES.has(fromCountry) && GCC_COUNTRIES.has(toCountry)) {
+    return { days: 0.65, cost: 0.85, reliabilityDrop: 0.02 };
+  }
+  return { days: 1.15, cost: 1.45, reliabilityDrop: 0.035 };
+}
+
 export function estimateLegMetrics(
   leg,
-  { isTransfer = false, isRemoteAlternate = false, isSecondaryPort = false } = {}
+  {
+    isTransfer = false,
+    isRemoteAlternate = false,
+    isSecondaryPort = false,
+    originPortTier = 1,
+    destPortTier = null,
+    isOriginHomePort = true,
+    isDestHomePort = true,
+    borderDays = 0,
+    borderCost = 0,
+  } = {}
 ) {
   const mode = leg.mode || 'road';
   const profile = MODE_PROFILES[mode] ?? MODE_PROFILES.road;
@@ -54,8 +82,8 @@ export function estimateLegMetrics(
   // Drayage legs on sea/rail routes: differentiate rail corridors, cross-region alternate ports, and local home-port drayage
   if (leg.kind === 'drayage') {
     if (leg.mode === 'rail') {
-      const days = dist / 50 / 24 + 0.35;
-      const cost = (dist / 1000) * 3.8 + 0.35;
+      const days = dist / 50 / 24 + 0.35 + borderDays;
+      const cost = (dist / 1000) * 3.8 + 0.35 + borderCost;
       return {
         distanceKm: +dist.toFixed(1),
         transitDays: +days.toFixed(2),
@@ -63,16 +91,20 @@ export function estimateLegMetrics(
       };
     }
     if (isRemoteAlternate) {
-      const days = dist / 45 / 24 + 0.9;
-      const cost = (dist / 1000) * 14.0 + 1.1;
+      const days = dist / 43 / 24 + 0.85 + borderDays;
+      const cost =
+        (Math.min(dist, 60) / 1000) * 8.0 +
+        (Math.max(0, dist - 60) / 1000) * 15.5 +
+        1.1 +
+        borderCost;
       return {
         distanceKm: +dist.toFixed(1),
         transitDays: +days.toFixed(2),
         costIndex: +cost.toFixed(2),
       };
     }
-    const days = dist / 50 / 24 + 0.25;
-    const cost = (dist / 1000) * 8.0 + 0.35;
+    const days = dist / 50 / 24 + 0.25 + borderDays;
+    const cost = (dist / 1000) * 8.0 + 0.35 + borderCost;
     return {
       distanceKm: +dist.toFixed(1),
       transitDays: +days.toFixed(2),
@@ -87,16 +119,30 @@ export function estimateLegMetrics(
   if (mode === 'rail' && leg.hasFerry) {
     dwellDays += 0.8; // Caspian Sea Ro-Ro ferry transfer overhead
   }
-  if (mode === 'sea' && isSecondaryPort) {
-    dwellDays += 0.5;
+
+  let baseCost = isTransfer && profile.transferCost != null ? profile.transferCost : profile.baseCost;
+
+  if (mode === 'sea') {
+    const dTier = destPortTier ?? (isSecondaryPort ? 3 : 1);
+    if (dTier === 2) {
+      dwellDays += isDestHomePort ? 0.2 : 0.55;
+      baseCost += isDestHomePort ? 0.15 : 0.45;
+    } else if (dTier >= 3 || isSecondaryPort) {
+      dwellDays += 1.0;
+      baseCost += 0.8;
+    }
+
+    if (originPortTier === 2 && !isOriginHomePort) {
+      dwellDays += 0.3;
+      baseCost += 0.25;
+    } else if (originPortTier >= 3 && !isOriginHomePort) {
+      dwellDays += 0.6;
+      baseCost += 0.5;
+    }
   }
 
-  const days = dist / profile.speedKmh / 24 + dwellDays;
-  let baseCost = isTransfer && profile.transferCost != null ? profile.transferCost : profile.baseCost;
-  if (mode === 'sea' && isSecondaryPort) {
-    baseCost += 0.6;
-  }
-  const cost = (dist / 1000) * profile.costPer1000Km + baseCost;
+  const days = dist / profile.speedKmh / 24 + dwellDays + (mode === 'road' ? borderDays : 0);
+  const cost = (dist / 1000) * profile.costPer1000Km + baseCost + (mode === 'road' ? borderCost : 0);
 
   return {
     distanceKm: +dist.toFixed(1),
@@ -111,13 +157,16 @@ export function scoreRoute(primaryMode, legs, { chokepointCount = 0, legOptions 
   let totalDays = 0;
   let totalCost = 0;
   let mainLegIndex = 0;
+  let extraReliabilityDrop = 0;
 
   for (let i = 0; i < legs.length; i++) {
     const leg = legs[i];
     const isMain = leg.kind !== 'drayage';
     const isTransfer = isMain && mainLegIndex > 0;
     if (isMain) mainLegIndex++;
-    const m = estimateLegMetrics(leg, { isTransfer, ...(legOptions[i] ?? {}) });
+    const opts = legOptions[i] ?? {};
+    extraReliabilityDrop += opts.reliabilityDrop ?? 0;
+    const m = estimateLegMetrics(leg, { isTransfer, ...opts });
     totalDist += m.distanceKm;
     totalDays += m.transitDays;
     totalCost += m.costIndex;
@@ -128,7 +177,7 @@ export function scoreRoute(primaryMode, legs, { chokepointCount = 0, legOptions 
     0.4,
     Math.min(
       0.99,
-      profile.reliabilityBase - transferCount * 0.025 - chokepointCount * 0.015
+      profile.reliabilityBase - transferCount * 0.025 - chokepointCount * 0.015 - extraReliabilityDrop
     )
   );
 

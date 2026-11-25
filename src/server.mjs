@@ -169,9 +169,9 @@ export async function createRouterService({
 
       if (req.method === 'GET' && pathname === '/v1/graph/links') {
         const nodes = new Map(graph.nodes.map((node) => [node.id, [node.lon, node.lat]]));
-        const land = (graph.landEdges ?? []).flatMap(({ from, to, mode }) => {
-          const endpoints = [nodes.get(from), nodes.get(to)];
-          return endpoints.every((point) => point?.every(Number.isFinite)) ? [{ mode, coords: endpoints }] : [];
+        const land = (graph.landEdges ?? []).flatMap(({ from, to, mode, coords }) => {
+          const line = coords?.length >= 2 ? coords : [nodes.get(from), nodes.get(to)];
+          return line.every((point) => point?.every(Number.isFinite)) ? [{ mode, coords: line }] : [];
         });
         const sea = (graph.marnet?.edges ?? []).map(({ coords }) => ({ mode: 'sea', coords }));
         sendJson(res, 200, { graphVersion: graph.graphVersion, sea, land });

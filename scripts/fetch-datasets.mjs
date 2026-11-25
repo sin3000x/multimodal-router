@@ -24,6 +24,11 @@ const DATASETS = [
     url: 'https://davidmegginson.github.io/ourairports-data/airports.csv',
     description: 'OurAirports public-domain global airport catalog',
   },
+  {
+    name: 'ne_10m_roads.geojson',
+    url: 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_roads.geojson',
+    description: 'Natural Earth 1:10m global highway network',
+  },
 ];
 
 async function existsNonEmpty(filePath) {
