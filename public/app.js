@@ -88,9 +88,13 @@ const graphView = { ...routeView };
 let view = routeView;
 let fitRoutesOnReturn = false;
 let graphNodes = null;
-let graphLinks = null;
+let graphNodeById = new Map();
+let graphLinks = { sea: null, land: null, road: null, air: null };
+let graphLinkCounts = null;
+let graphAirByNode = new Map();
+let graphLandByNode = new Map();
 let nodesRequest = null;
-let linksRequest = null;
+let graphLinkRequests = {};
 let selectedGraphNode = null;
 let graphMarkerCache = null;
 let renderedMarkers = [];
@@ -571,39 +575,123 @@ function drawRouteWaypointLabels(ctx, tokens, width, height) {
   ctx.restore();
 }
 
-function drawGraphLinks(ctx, tokens, width, height) {
-  if (!graphLinks) return;
-  for (const [layer, paths] of Object.entries(graphLinks)) {
-    if (!document.getElementById(`${layer}-layer`).checked) continue;
-    ctx.save();
-    ctx.globalAlpha = layer === 'sea' ? 0.42 : 0.78;
-    ctx.lineWidth = layer === 'sea' ? 1 : 1.7;
-    for (const [mode, segments] of paths) {
-      ctx.strokeStyle = tokens.modes[mode] || tokens.modes.rail;
-      ctx.beginPath();
-      for (const { points, minMx, maxMx, minMy, maxMy } of segments) {
-        const [, top] = projectRaw(0, minMy, width, height);
-        const [, bottom] = projectRaw(0, maxMy, width, height);
-        if (top > height || bottom < 0) continue;
-        for (const offset of visibleWorldOffsets(minMx, maxMx)) {
-          points.forEach(([mx, my], index) => {
-            const [x, y] = projectRaw(mx + offset, my, width, height);
-            if (index === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-          });
+function drawAirspaceBoxes(ctx, tokens, width, height) {
+  if (!graphNodes || !document.getElementById('airspace-layer')?.checked) return;
+  const airspaces = graphNodes.filter((n) => n.boxes?.length);
+  if (!airspaces.length) return;
+  ctx.save();
+  ctx.font = '600 11px -apple-system, BlinkMacSystemFont, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const node of airspaces) {
+    const selected = node === selectedGraphNode;
+    ctx.fillStyle = selected ? 'rgba(220, 38, 38, 0.20)' : 'rgba(220, 38, 38, 0.09)';
+    ctx.strokeStyle = tokens.danger;
+    ctx.lineWidth = selected ? 1.8 : 1.1;
+    ctx.setLineDash([5, 4]);
+    for (const box of node.boxes) {
+      const minMx = lonToMx(box.minLon);
+      const maxMx = lonToMx(box.maxLon);
+      const spanMx = maxMx >= minMx ? maxMx - minMx : 1 - minMx + maxMx;
+      const top = latToMy(box.maxLat);
+      const bottom = latToMy(box.minLat);
+      for (const offset of visibleWorldOffsets(minMx, minMx + spanMx)) {
+        const [x1, y1] = projectRaw(minMx + offset, top, width, height);
+        const [x2, y2] = projectRaw(minMx + spanMx + offset, bottom, width, height);
+        if (x2 < 0 || x1 > width || y2 < 0 || y1 > height) continue;
+        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        if (x2 - x1 > 70 && y2 - y1 > 22) {
+          ctx.fillStyle = tokens.danger;
+          ctx.fillText(node.name_zh || node.id, (x1 + x2) / 2, (y1 + y2) / 2);
+          ctx.fillStyle = selected ? 'rgba(220, 38, 38, 0.20)' : 'rgba(220, 38, 38, 0.09)';
         }
       }
-      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawProjectedSegments(ctx, segments, width, height) {
+  ctx.beginPath();
+  for (const { points, minMx, maxMx, minMy, maxMy } of segments) {
+    const [, top] = projectRaw(0, minMy, width, height);
+    const [, bottom] = projectRaw(0, maxMy, width, height);
+    if (top > height || bottom < 0) continue;
+    for (const offset of visibleWorldOffsets(minMx, maxMx)) {
+      points.forEach(([mx, my], index) => {
+        const [x, y] = projectRaw(mx + offset, my, width, height);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+    }
+  }
+  ctx.stroke();
+}
+
+function drawGraphLinks(ctx, tokens, width, height) {
+  drawAirspaceBoxes(ctx, tokens, width, height);
+
+  const layerStyles = [
+    { layer: 'sea', alpha: 0.42, lineWidth: 1 },
+    { layer: 'road', alpha: 0.34, lineWidth: 0.85 },
+    { layer: 'land', alpha: 0.82, lineWidth: 1.8 },
+  ];
+  for (const { layer, alpha, lineWidth } of layerStyles) {
+    const paths = graphLinks[layer];
+    if (!paths || !document.getElementById(`${layer}-layer`)?.checked) continue;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = lineWidth;
+    for (const [mode, segments] of paths) {
+      ctx.strokeStyle = tokens.modes[mode] || tokens.modes.rail;
+      drawProjectedSegments(ctx, segments, width, height);
     }
     ctx.restore();
+  }
+
+  if (graphLinks.air && document.getElementById('air-layer')?.checked) {
+    const minFreq = view.zoom < 2 ? 4 : view.zoom < 4 ? 2 : 1;
+    const filtered = minFreq === 1 ? graphLinks.air : graphLinks.air.filter((s) => s.freq >= minFreq);
+    ctx.save();
+    ctx.globalAlpha = view.zoom < 2 ? 0.22 : 0.28;
+    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = tokens.modes.air;
+    drawProjectedSegments(ctx, filtered, width, height);
+    ctx.restore();
+  }
+
+  if (selectedGraphNode) {
+    const airRoutes = graphLinks.air ? graphAirByNode.get(selectedGraphNode.id) : null;
+    if (airRoutes?.length) {
+      ctx.save();
+      ctx.globalAlpha = 0.65;
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = tokens.modes.air;
+      drawProjectedSegments(ctx, airRoutes, width, height);
+      ctx.restore();
+    }
+    const landRoutes = graphLinks.land ? graphLandByNode.get(selectedGraphNode.id) : null;
+    if (landRoutes?.length) {
+      ctx.save();
+      ctx.globalAlpha = 0.95;
+      ctx.lineWidth = 2.6;
+      for (const seg of landRoutes) {
+        ctx.strokeStyle = tokens.modes[seg.mode] || tokens.modes.rail;
+        drawProjectedSegments(ctx, [seg], width, height);
+      }
+      ctx.restore();
+    }
   }
 }
 
 function getGraphMarkers(width, filter) {
   const { zoom } = view;
   const worldPx = width * zoom;
+  const majorOnly = Boolean(document.getElementById('graph-major-only')?.checked);
   if (graphMarkerCache?.worldPx === worldPx && graphMarkerCache.zoom === zoom &&
-      graphMarkerCache.filter === filter && graphMarkerCache.selected === selectedGraphNode) {
+      graphMarkerCache.filter === filter && graphMarkerCache.majorOnly === majorOnly &&
+      graphMarkerCache.selected === selectedGraphNode) {
     return graphMarkerCache.markers;
   }
 
@@ -613,7 +701,7 @@ function getGraphMarkers(width, filter) {
   const markers = [];
   for (const node of graphNodes) {
     const selected = node === selectedGraphNode;
-    if (!selected && ((filter && !node.groups.includes(filter)) || (zoom < 2 && !node.featured))) continue;
+    if (!selected && ((filter && !node.groups.includes(filter)) || (majorOnly && !node.featured))) continue;
     if (selected || zoom >= GRAPH_DETAIL_ZOOM) {
       markers.push({ wp: node, mx: node.mx, my: node.my });
       continue;
@@ -630,7 +718,7 @@ function getGraphMarkers(width, filter) {
     markers.push(count === 1 ? { wp, mx, my } : { count, mx: mx / count, my: my / count });
   }
   markers.sort((a, b) => Number(a.wp === selectedGraphNode) - Number(b.wp === selectedGraphNode));
-  graphMarkerCache = { worldPx, zoom, filter, selected: selectedGraphNode, markers };
+  graphMarkerCache = { worldPx, zoom, filter, majorOnly, selected: selectedGraphNode, markers };
   return markers;
 }
 
@@ -655,7 +743,8 @@ function drawNodeGraph(ctx, tokens, width, height) {
   for (const marker of markers) {
     const { wp, x, y, count } = marker;
     const emphasis = wp && (wp === selectedGraphNode || wp.id === hoveredWaypointId);
-    const radius = count ? Math.min(15, 9 + Math.log2(count)) : emphasis ? 7 : 4;
+    const isMajorHub = wp && (wp.portTier === 1 || wp.isHub || wp.type === 'city' || wp.major || (wp.routeCount ?? 0) >= 50);
+    const radius = count ? Math.min(16, 9 + Math.log2(count)) : emphasis ? 7 : isMajorHub ? 5 : 3.5;
     const group = wp && (filter && wp.groups.includes(filter) ? filter : wp.groups[0]);
     ctx.fillStyle = group ? tokens.modes[NODE_GROUPS[group].color] : tokens.labelBg;
     ctx.strokeStyle = count ? tokens.labelBorder : tokens.land;
@@ -1276,21 +1365,114 @@ function initMapInteractions() {
   }
 }
 
+function renderGraphNodeCard(node) {
+  const badgesEl = document.getElementById('graph-node-badges');
+  const detailsEl = document.getElementById('graph-node-details');
+  const metricsEl = document.getElementById('graph-node-metrics');
+  const connEl = document.getElementById('graph-node-connections');
+  const aliasesEl = document.getElementById('graph-node-aliases');
+
+  const label = nodeLabel(node);
+  document.getElementById('graph-node-name').textContent = label;
+
+  badgesEl.replaceChildren();
+  const addBadge = (text, accent = false) => {
+    const span = document.createElement('span');
+    span.className = `graph-badge${accent ? ' graph-badge-accent' : ''}`;
+    span.textContent = text;
+    badgesEl.appendChild(span);
+  };
+  for (const group of node.groups) addBadge(NODE_GROUPS[group].label);
+  if (node.portTier) addBadge(`Tier ${node.portTier} 港口`, node.portTier === 1);
+  if (node.airportSize === 'large_airport') addBadge('大型机场', true);
+  else if (node.airportSize === 'medium_airport') addBadge('中型机场');
+  if (node.isHub || node.type === 'hub_airport') addBadge('核心枢纽', true);
+  if (node.major) addBadge('关键咽喉', true);
+
+  const fullName = node.name_zh || node.name_en;
+  detailsEl.textContent = [
+    fullName && fullName !== label && !label.startsWith(`${fullName}（`) ? fullName : '',
+    node.name_en && node.name_en !== fullName ? node.name_en : '',
+    node.codeStandard ? `${node.codeStandard}: ${node.code || node.id}` : '',
+    node.country,
+    node.region,
+    `${node.lon.toFixed(2)}, ${node.lat.toFixed(2)}`,
+  ].filter(Boolean).join(' · ');
+
+  const metrics = [];
+  if (node.routeCount != null) metrics.push(['直飞航线', `${node.routeCount} 条`]);
+  if (node.landDegree > 0) metrics.push(['陆铁走廊', `${node.landDegree} 条`]);
+  if (node.affectedLaneCount != null) metrics.push(['受影响线路', `${node.affectedLaneCount} 条`]);
+  if (node.hasMarnet) metrics.push(['海运路网', node.snapDistanceKm != null ? `已接入 (${node.snapDistanceKm}km)` : '已接入']);
+  if (node.hasRoadnet) metrics.push(['公路路网', node.roadSnapKm != null ? `已接入 (${node.roadSnapKm}km)` : '已接入']);
+  if (node.boxes?.length) metrics.push(['空域边界', `${node.boxes.length} 个区域`]);
+
+  metricsEl.replaceChildren();
+  metricsEl.classList.toggle('hidden', !metrics.length);
+  for (const [k, v] of metrics.slice(0, 6)) {
+    const box = document.createElement('div');
+    box.className = 'metric';
+    const sp = document.createElement('span');
+    sp.textContent = k;
+    const st = document.createElement('strong');
+    st.textContent = v;
+    box.append(sp, st);
+    metricsEl.appendChild(box);
+  }
+
+  connEl.replaceChildren();
+  const connItems = [];
+  let connTitle = '';
+  const airRoutes = graphLinks.air ? graphAirByNode.get(node.id) : null;
+  const landRoutes = graphLinks.land ? graphLandByNode.get(node.id) : null;
+  if (airRoutes?.length) {
+    connTitle = `直飞目的地（共 ${airRoutes.length} 条，按频次）`;
+    const sorted = [...airRoutes].sort((a, b) => b.freq - a.freq).slice(0, 6);
+    for (const seg of sorted) {
+      const peer = graphNodeById.get(seg.peerId);
+      connItems.push(`${peer ? nodeLabel(peer) : seg.peerId} · 频次 ${seg.freq}`);
+    }
+  } else if (landRoutes?.length) {
+    connTitle = `连接的陆铁走廊（${landRoutes.length} 条）`;
+    for (const seg of landRoutes.slice(0, 6)) {
+      const peer = graphNodeById.get(seg.peerId);
+      const km = seg.distanceKm ? ` (${Math.round(seg.distanceKm)} km)` : '';
+      connItems.push(`${seg.corridor || MODE_LABELS[seg.mode] || seg.mode} → ${peer ? nodeLabel(peer) : seg.peerId}${km}`);
+    }
+  }
+  connEl.classList.toggle('hidden', !connItems.length);
+  if (connItems.length) {
+    const title = document.createElement('div');
+    title.className = 'graph-connections-title';
+    title.textContent = connTitle;
+    const ul = document.createElement('ul');
+    for (const text of connItems) {
+      const li = document.createElement('li');
+      li.textContent = text;
+      ul.appendChild(li);
+    }
+    connEl.append(title, ul);
+  }
+
+  const aliases = (node.aliases || []).filter((a) => a && a !== node.name_zh && a !== node.name_en && a !== node.id);
+  aliasesEl.classList.toggle('hidden', !aliases.length);
+  aliasesEl.textContent = aliases.length ? `别名：${aliases.slice(0, 5).join(' / ')}` : '';
+
+  const isPassage = node.groups.includes('passage');
+  const hasAvoidOption = Boolean(document.querySelector(`#chokepoint-list input[value="${CSS.escape(node.id)}"]`));
+  document.getElementById('graph-set-from').classList.toggle('hidden', isPassage);
+  document.getElementById('graph-set-to').classList.toggle('hidden', isPassage);
+  document.getElementById('graph-set-avoid').classList.toggle('hidden', !hasAvoidOption);
+  document.getElementById('graph-endpoints').classList.toggle('hidden', isPassage && !hasAvoidOption);
+}
+
 function selectGraphNode(node, recenter = false) {
   selectedGraphNode = node;
   document.getElementById('graph-card').classList.toggle('hidden', !node);
   if (node) {
-    const label = nodeLabel(node);
-    document.getElementById('graph-node-name').textContent = label;
-    const labels = node.groups.map((group) => NODE_GROUPS[group].label).join(' / ');
-    const fullName = node.name_zh || node.name_en;
-    document.getElementById('graph-node-details').textContent = [
-      fullName && fullName !== label && !label.startsWith(`${fullName}（`) ? fullName : '',
-      labels,
-      node.country,
-      `${node.lon.toFixed(2)}, ${node.lat.toFixed(2)}`,
-    ].filter(Boolean).join(' · ');
-    document.getElementById('graph-endpoints').classList.toggle('hidden', node.groups.includes('passage'));
+    renderGraphNodeCard(node);
+    if (node.routeCount > 0 && !graphLinks.air) ensureGraphLayer('air');
+    if (node.landDegree > 0 && !graphLinks.land) ensureGraphLayer('land');
     if (recenter) {
       view.zoom = Math.max(view.zoom, GRAPH_DETAIL_ZOOM);
       view.centerMx = node.mx;
@@ -1302,18 +1484,125 @@ function selectGraphNode(node, recenter = false) {
   drawWorldMap(currentRoutes, activeRouteId);
 }
 
-function prepareGraphLinks(links) {
+function prepareGraphLinks(links, layer) {
   const byMode = new Map();
-  for (const { mode, coords } of links) {
+  if (layer === 'land') graphLandByNode = new Map();
+  for (const { mode, from, to, corridor, distanceKm, coords } of links) {
     const points = unwrapMxs(coords || []);
     if (points.length < 2) continue;
     const xs = points.map(([mx]) => mx);
     const ys = points.map(([, my]) => my);
+    const seg = {
+      mode, from, to, corridor, distanceKm, points,
+      minMx: Math.min(...xs), maxMx: Math.max(...xs),
+      minMy: Math.min(...ys), maxMy: Math.max(...ys),
+    };
     const segments = byMode.get(mode) || [];
-    segments.push({ points, minMx: Math.min(...xs), maxMx: Math.max(...xs), minMy: Math.min(...ys), maxMy: Math.max(...ys) });
+    segments.push(seg);
     byMode.set(mode, segments);
+    if (layer === 'land' && from && to) {
+      const fList = graphLandByNode.get(from) || [];
+      fList.push({ ...seg, peerId: to });
+      graphLandByNode.set(from, fList);
+      const tList = graphLandByNode.get(to) || [];
+      tList.push({ ...seg, peerId: from });
+      graphLandByNode.set(to, tList);
+    }
   }
   return byMode;
+}
+
+function prepareAirLinks(edges) {
+  graphAirByNode = new Map();
+  const segments = [];
+  for (const [fromId, toId, freq = 1] of edges) {
+    const from = graphNodeById.get(fromId);
+    const to = graphNodeById.get(toId);
+    if (!from || !to) continue;
+    const points = unwrapMxs([[from.lon, from.lat], [to.lon, to.lat]]);
+    if (points.length < 2) continue;
+    const xs = points.map(([mx]) => mx);
+    const ys = points.map(([, my]) => my);
+    const seg = {
+      points, freq,
+      minMx: Math.min(...xs), maxMx: Math.max(...xs),
+      minMy: Math.min(...ys), maxMy: Math.max(...ys),
+    };
+    segments.push(seg);
+    const fList = graphAirByNode.get(fromId) || [];
+    fList.push({ ...seg, peerId: toId });
+    graphAirByNode.set(fromId, fList);
+    const tList = graphAirByNode.get(toId) || [];
+    tList.push({ ...seg, peerId: fromId });
+    graphAirByNode.set(toId, tList);
+  }
+  return segments;
+}
+
+function updateGraphStatus() {
+  const status = document.getElementById('graph-status');
+  if (!graphNodes) return;
+  const filter = document.getElementById('graph-type').value;
+  const majorOnly = Boolean(document.getElementById('graph-major-only')?.checked);
+  const visibleCount = graphNodes.filter((n) => (!filter || n.groups.includes(filter)) && (!majorOnly || n.featured)).length;
+  const totalCount = graphNodes.length;
+  const nodePart = visibleCount === totalCount
+    ? `全部 ${totalCount.toLocaleString('zh-CN')} 个节点`
+    : `显示 ${visibleCount.toLocaleString('zh-CN')} / ${totalCount.toLocaleString('zh-CN')} 个节点`;
+  const activeLayers = ['sea', 'air', 'land', 'road']
+    .filter((l) => document.getElementById(`${l}-layer`)?.checked && graphLinks[l])
+    .map((l) => {
+      const n = graphLinkCounts?.[l];
+      return n ? `${MODE_LABELS[l]}${n.toLocaleString('zh-CN')}` : MODE_LABELS[l];
+    });
+  status.textContent = activeLayers.length
+    ? `${nodePart} · 图层：${activeLayers.join(' / ')} · 放大显示名称`
+    : `${nodePart} · 放大或点击聚类查看详情`;
+}
+
+async function ensureGraphLayer(layer) {
+  if (graphLinks[layer] || graphLinkRequests[layer]) return graphLinkRequests[layer];
+  const status = document.getElementById('graph-status');
+  status.textContent = `正在加载${MODE_LABELS[layer] || layer}图层…`;
+  const req = fetchJson(`/v1/graph/links?layers=${encodeURIComponent(layer)}`)
+    .then((data) => {
+      if (data.counts) graphLinkCounts = data.counts;
+      if (layer === 'air') graphLinks.air = prepareAirLinks(data.air || []);
+      else graphLinks[layer] = prepareGraphLinks(data[layer] || [], layer);
+      updateGraphStatus();
+      if (selectedGraphNode) renderGraphNodeCard(selectedGraphNode);
+      drawWorldMap(currentRoutes, activeRouteId);
+    })
+    .catch(() => {
+      const checkbox = document.getElementById(`${layer}-layer`);
+      if (checkbox) checkbox.checked = false;
+      status.textContent = `${MODE_LABELS[layer] || layer}图层加载失败，请重试`;
+    })
+    .finally(() => {
+      delete graphLinkRequests[layer];
+    });
+  graphLinkRequests[layer] = req;
+  return req;
+}
+
+function updateGraphLegendCounts() {
+  if (!graphNodes) return;
+  const counts = {};
+  for (const node of graphNodes) {
+    for (const g of node.groups) counts[g] = (counts[g] || 0) + 1;
+  }
+  for (const btn of document.querySelectorAll('.graph-legend-btn')) {
+    const group = btn.dataset.graphGroup;
+    const span = btn.querySelector('.legend-count');
+    if (span) span.textContent = (counts[group] || 0).toLocaleString('zh-CN');
+  }
+}
+
+function syncGraphLegendButtons() {
+  const filter = document.getElementById('graph-type').value;
+  for (const btn of document.querySelectorAll('.graph-legend-btn')) {
+    btn.setAttribute('aria-pressed', String(btn.dataset.graphGroup === filter));
+  }
 }
 
 function updateGraphSearch() {
@@ -1364,8 +1653,8 @@ function initNodeGraph() {
   const status = document.getElementById('graph-status');
   const search = document.getElementById('graph-search');
   const results = document.getElementById('graph-results');
-  const seaLayer = document.getElementById('sea-layer');
-  const landLayer = document.getElementById('land-layer');
+  const majorOnly = document.getElementById('graph-major-only');
+  const airspaceLayer = document.getElementById('airspace-layer');
 
   document.getElementById('route-view-btn').onclick = () => setMapView(routeView);
   document.getElementById('graph-view-btn').onclick = async () => {
@@ -1383,7 +1672,9 @@ function initNodeGraph() {
         searchTerms: [node.id, node.code, node.name_zh, node.name_en, NODE_SHORT_NAMES[node.id], ...(node.aliases || [])]
           .filter(Boolean).map((term) => term.toLowerCase()),
       }));
-      status.textContent = `${nodes.length.toLocaleString('zh-CN')} 个节点 · 放大显示名称`;
+      graphNodeById = new Map(graphNodes.map((n) => [n.id, n]));
+      updateGraphLegendCounts();
+      updateGraphStatus();
       if (view === graphView) updateGraphSearch();
       drawWorldMap(currentRoutes, activeRouteId);
     } catch {
@@ -1393,26 +1684,31 @@ function initNodeGraph() {
     }
   };
 
-  async function toggleLayers() {
-    if (!graphLinks && !linksRequest && (seaLayer.checked || landLayer.checked)) {
-      linksRequest = fetchJson('/v1/graph/links');
-      status.textContent = '正在加载线路图层…';
-      try {
-        const { sea, land } = await linksRequest;
-        graphLinks = { sea: prepareGraphLinks(sea), land: prepareGraphLinks(land) };
-        status.textContent = graphNodes ? `${graphNodes.length.toLocaleString('zh-CN')} 个节点 · 放大显示名称` : '';
-      } catch {
-        seaLayer.checked = false;
-        landLayer.checked = false;
-        status.textContent = '线路图层加载失败，请重新勾选';
-      } finally {
-        linksRequest = null;
+  for (const layer of ['sea', 'air', 'land', 'road']) {
+    const checkbox = document.getElementById(`${layer}-layer`);
+    checkbox.onchange = async () => {
+      if (checkbox.checked && !graphLinks[layer]) {
+        await ensureGraphLayer(layer);
+      } else {
+        updateGraphStatus();
+        drawWorldMap(currentRoutes, activeRouteId);
       }
-    }
+    };
+  }
+  airspaceLayer.onchange = () => drawWorldMap(currentRoutes, activeRouteId);
+  majorOnly.onchange = () => {
+    updateGraphStatus();
     drawWorldMap(currentRoutes, activeRouteId);
+  };
+
+  for (const btn of document.querySelectorAll('.graph-legend-btn')) {
+    btn.onclick = () => {
+      const select = document.getElementById('graph-type');
+      select.value = select.value === btn.dataset.graphGroup ? '' : btn.dataset.graphGroup;
+      select.onchange();
+    };
   }
 
-  seaLayer.onchange = landLayer.onchange = toggleLayers;
   search.oninput = search.onfocus = updateGraphSearch;
   search.onkeydown = (event) => {
     if (event.key === 'Escape') results.classList.add('hidden');
@@ -1424,12 +1720,27 @@ function initNodeGraph() {
   document.getElementById('graph-type').onchange = () => {
     const filter = document.getElementById('graph-type').value;
     if (filter && !selectedGraphNode?.groups.includes(filter)) selectGraphNode(null);
+    syncGraphLegendButtons();
+    updateGraphStatus();
     updateGraphSearch();
     drawWorldMap(currentRoutes, activeRouteId);
   };
   document.getElementById('close-graph-card').onclick = () => {
     selectGraphNode(null);
     search.focus();
+  };
+  document.getElementById('graph-set-avoid').onclick = () => {
+    if (!selectedGraphNode) return;
+    const checkbox = document.querySelector(`#chokepoint-list input[value="${CSS.escape(selectedGraphNode.id)}"]`);
+    if (!checkbox) return;
+    checkbox.checked = true;
+    updateActionButton();
+    setMapView(routeView);
+    const panel = document.getElementById('map-panel');
+    if (document.fullscreenElement === panel || panel.classList.contains('map-maximized')) {
+      document.getElementById('fullscreen-btn').click();
+    }
+    runQuery();
   };
   for (const endpoint of ['from', 'to']) {
     document.getElementById(`graph-set-${endpoint}`).onclick = () => {

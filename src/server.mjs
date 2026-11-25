@@ -76,6 +76,12 @@ export async function createRouterService({
   ]);
 
   const router = createRouter(graph);
+  const chokepointIndex = precomputed?.chokepointIndex ?? {};
+  const landDegreeById = new Map();
+  for (const edge of graph.landEdges ?? []) {
+    if (edge.from) landDegreeById.set(edge.from, (landDegreeById.get(edge.from) ?? 0) + 1);
+    if (edge.to) landDegreeById.set(edge.to, (landDegreeById.get(edge.to) ?? 0) + 1);
+  }
   const cache = createRouteCache({
     dbPath,
     graphVersion: graph.graphVersion,
@@ -159,22 +165,70 @@ export async function createRouterService({
       if (req.method === 'GET' && pathname === '/v1/graph/nodes') {
         const nodes = graph.nodes
           .filter((node) => node.type !== 'country' && Number.isFinite(node.lon) && Number.isFinite(node.lat))
-          .map(({ id, code, type, functions, name_zh, name_en, country, lon, lat, aliases, curated, isMajor }) => ({
-            id, code, type, functions, name_zh, name_en, country, lon, lat, aliases,
-            featured: Boolean(curated || isMajor),
-          }));
+          .map((node) => {
+            const item = {
+              id: node.id,
+              code: node.code,
+              type: node.type,
+              functions: node.functions,
+              name_zh: node.name_zh,
+              name_en: node.name_en,
+              country: node.country,
+              lon: node.lon,
+              lat: node.lat,
+              aliases: node.aliases,
+              featured: Boolean(node.curated || node.isMajor),
+              hasMarnet: Number.isInteger(node.marnetVertexId),
+              hasRoadnet: Number.isInteger(node.roadVertexId),
+              landDegree: landDegreeById.get(node.id) ?? 0,
+            };
+            for (const key of [
+              'codeStandard', 'region', 'portTier', 'airportSize', 'routeCount',
+              'isHub', 'major', 'marnetPassage', 'boxes', 'municipality',
+              'snapDistanceKm', 'roadSnapKm',
+            ]) {
+              if (node[key] !== undefined) item[key] = node[key];
+            }
+            const affectedLaneCount = chokepointIndex[node.id]?.affectedLaneCount;
+            if (affectedLaneCount !== undefined) item.affectedLaneCount = affectedLaneCount;
+            return item;
+          });
         sendJson(res, 200, { graphVersion: graph.graphVersion, nodes });
         return;
       }
 
       if (req.method === 'GET' && pathname === '/v1/graph/links') {
-        const nodes = new Map(graph.nodes.map((node) => [node.id, [node.lon, node.lat]]));
-        const land = (graph.landEdges ?? []).flatMap(({ from, to, mode, coords }) => {
-          const line = coords?.length >= 2 ? coords : [nodes.get(from), nodes.get(to)];
-          return line.every((point) => point?.every(Number.isFinite)) ? [{ mode, coords: line }] : [];
-        });
-        const sea = (graph.marnet?.edges ?? []).map(({ coords }) => ({ mode: 'sea', coords }));
-        sendJson(res, 200, { graphVersion: graph.graphVersion, sea, land });
+        const counts = {
+          sea: (graph.marnet?.edges ?? []).length,
+          land: (graph.landEdges ?? []).length,
+          road: (graph.roadnet?.edges ?? []).length,
+          air: (graph.airnet?.edges ?? []).length,
+        };
+        const rawLayers = url.searchParams.get('layers');
+        const requested = rawLayers
+          ? new Set(rawLayers.split(',').map((s) => s.trim()).filter(Boolean))
+          : new Set(['sea', 'land']);
+
+        const payload = { graphVersion: graph.graphVersion, counts };
+        if (requested.has('sea')) {
+          payload.sea = (graph.marnet?.edges ?? []).map(({ coords }) => ({ mode: 'sea', coords }));
+        }
+        if (requested.has('land')) {
+          const nodes = new Map(graph.nodes.map((node) => [node.id, [node.lon, node.lat]]));
+          payload.land = (graph.landEdges ?? []).flatMap(({ from, to, mode, corridor, distanceKm, coords }) => {
+            const line = coords?.length >= 2 ? coords : [nodes.get(from), nodes.get(to)];
+            return line.every((point) => point?.every(Number.isFinite))
+              ? [{ mode, from, to, corridor, distanceKm, coords: line }]
+              : [];
+          });
+        }
+        if (requested.has('road')) {
+          payload.road = (graph.roadnet?.edges ?? []).map(({ coords }) => ({ mode: 'road', coords }));
+        }
+        if (requested.has('air')) {
+          payload.air = graph.airnet?.edges ?? [];
+        }
+        sendJson(res, 200, payload);
         return;
       }
 

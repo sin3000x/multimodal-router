@@ -126,16 +126,20 @@
             <option value="land">陆铁枢纽与口岸</option>
             <option value="passage">咽喉与空域</option>
           </select>
+          <label><input type="checkbox" id="graph-major-only" /> 仅主要枢纽</label>
           <label><input type="checkbox" id="sea-layer" /> 海运航道</label>
+          <label><input type="checkbox" id="air-layer" /> 航空航线</label>
           <label><input type="checkbox" id="land-layer" /> 陆铁走廊</label>
+          <label><input type="checkbox" id="road-layer" /> 全球公路</label>
+          <label><input type="checkbox" id="airspace-layer" checked /> 空域范围</label>
           <span id="graph-status" role="status"></span>
         </div>
-        <div class="map-legend graph-legend graph-view" aria-label="节点图例">
-          <span class="legend-item"><i class="node-dot node-port"></i>港口</span>
-          <span class="legend-item"><i class="node-dot node-airport"></i>机场</span>
-          <span class="legend-item"><i class="node-dot node-city"></i>城市</span>
-          <span class="legend-item"><i class="node-dot node-land"></i>陆铁枢纽与口岸</span>
-          <span class="legend-item"><i class="node-dot node-passage"></i>咽喉与空域</span>
+        <div class="map-legend graph-legend graph-view" aria-label="节点图例与快速筛选">
+          <button type="button" class="legend-item graph-legend-btn" data-graph-group="port" aria-pressed="false"><i class="node-dot node-port"></i>港口 <span class="legend-count"></span></button>
+          <button type="button" class="legend-item graph-legend-btn" data-graph-group="airport" aria-pressed="false"><i class="node-dot node-airport"></i>机场 <span class="legend-count"></span></button>
+          <button type="button" class="legend-item graph-legend-btn" data-graph-group="city" aria-pressed="false"><i class="node-dot node-city"></i>城市 <span class="legend-count"></span></button>
+          <button type="button" class="legend-item graph-legend-btn" data-graph-group="land" aria-pressed="false"><i class="node-dot node-land"></i>陆铁枢纽与口岸 <span class="legend-count"></span></button>
+          <button type="button" class="legend-item graph-legend-btn" data-graph-group="passage" aria-pressed="false"><i class="node-dot node-passage"></i>咽喉与空域 <span class="legend-count"></span></button>
         </div>
         <div class="map-stage">
           <div class="map-viewport">
@@ -176,10 +180,15 @@
               <strong id="graph-node-name"></strong>
               <button id="close-graph-card" class="map-btn" type="button" aria-label="关闭节点详情">×</button>
             </div>
+            <div id="graph-node-badges" class="graph-badges"></div>
             <div id="graph-node-details"></div>
+            <div id="graph-node-metrics" class="metrics graph-metrics hidden"></div>
+            <div id="graph-node-connections" class="graph-connections hidden"></div>
+            <div id="graph-node-aliases" class="graph-aliases hidden"></div>
             <div id="graph-endpoints" class="graph-endpoints">
               <button id="graph-set-from" class="map-btn" type="button">设为起点</button>
               <button id="graph-set-to" class="map-btn" type="button">设为终点</button>
+              <button id="graph-set-avoid" class="map-btn map-btn-wide hidden" type="button">加入受阻模拟</button>
             </div>
           </article>
         </div>

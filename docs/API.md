@@ -14,8 +14,8 @@
 | 核心计算 | `POST` | `/v1/precompute` | 批量预热 | 批量计算指定 OD 对与避让场景组合并写入双层缓存（内存 LRU + SQLite）。 |
 | 词表与图谱 | `GET` | `/v1/nodes` | 节点搜索 | 按中英文名称、UN/LOCODE、IATA 三字码、别名或港群前缀检索可路由节点。 |
 | 词表与图谱 | `GET` | `/v1/chokepoints` | 咽喉与空域 | 获取全部规范海运咽喉与受控空域列表，以及预计算队列中的受影响线路统计。 |
-| 词表与图谱 | `GET` | `/v1/graph/nodes` | 全量图谱节点 | 一次性返回图谱内所有带有效坐标的非国家节点，供节点图谱视图与本地词表检索使用。 |
-| 词表与图谱 | `GET` | `/v1/graph/links` | 海运与陆铁连线 | 返回图谱中的 MARNET 海运航段折线与陆铁走廊连线坐标，用于地图底层路网可视化。 |
+| 词表与图谱 | `GET` | `/v1/graph/nodes` | 全量图谱节点 | 一次性返回图谱内所有带有效坐标的非国家节点及其枢纽/接入元数据，供节点图谱视图与本地词表检索使用。 |
+| 词表与图谱 | `GET` | `/v1/graph/links` | 多式联运路网连线 | 返回图谱中的 MARNET 海运航段、陆铁走廊、全球公路网及航空航线连线数据，支持按 layers 参数按需拉取。 |
 | 快照与运维 | `GET` | `/v1/snapshots/risk-radar` | Risk Radar 快照 | 导出与 supply-chain-risk-radar/network.mjs 兼容的静态风险雷达网络快照。 |
 | 快照与运维 | `GET` | `/health` | 健康检查 | 返回服务存活状态、当前图谱版本、构建节点边统计、预计算快照信息与缓存命中率。 |
 
@@ -535,7 +535,7 @@ curl 'http://127.0.0.1:4180/v1/chokepoints'
 
 #### `GET /v1/graph/nodes` · 全量图谱节点
 
-一次性返回图谱内所有带有效坐标的非国家节点，供节点图谱视图与本地词表检索使用。
+一次性返回图谱内所有带有效坐标的非国家节点及其枢纽/接入元数据，供节点图谱视图与本地词表检索使用。
 
 **请求参数**
 
@@ -552,7 +552,7 @@ curl 'http://127.0.0.1:4180/v1/graph/nodes'
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `graphVersion` | `string` | 当前图谱版本。 |
-| `nodes[]` | `object[]` | 节点数组，含 id、code、type、functions[]、name_zh、name_en、country、lon、lat、aliases[]、featured。 |
+| `nodes[]` | `object[]` | 节点数组，含 id、code、codeStandard、type、functions[]、name_zh、name_en、country、region、lon、lat、aliases[]、featured、portTier、airportSize、routeCount、isHub、major、hasMarnet、hasRoadnet、landDegree、affectedLaneCount、boxes 等字段。 |
 
 **返回示例**
 
@@ -563,6 +563,7 @@ curl 'http://127.0.0.1:4180/v1/graph/nodes'
     {
       "id": "NLRTM",
       "code": "NLRTM",
+      "codeStandard": "UN/LOCODE",
       "type": "port",
       "functions": [
         "port",
@@ -571,26 +572,33 @@ curl 'http://127.0.0.1:4180/v1/graph/nodes'
       "name_zh": "鹿特丹港",
       "name_en": "Rotterdam",
       "country": "NL",
+      "region": "europe",
       "lon": 4.4777,
       "lat": 51.9244,
       "aliases": [
         "Rotterdam"
       ],
-      "featured": true
+      "featured": true,
+      "portTier": 1,
+      "hasMarnet": true,
+      "hasRoadnet": true,
+      "landDegree": 0
     }
   ]
 }
 ```
 
-#### `GET /v1/graph/links` · 海运与陆铁连线
+#### `GET /v1/graph/links` · 多式联运路网连线
 
-返回图谱中的 MARNET 海运航段折线与陆铁走廊连线坐标，用于地图底层路网可视化。
+返回图谱中的 MARNET 海运航段、陆铁走廊、全球公路网及航空航线连线数据，支持按 layers 参数按需拉取。
 
-> **说明**：返回全量海运边与陆铁边坐标，响应体积较大，建议客户端按 graphVersion 做本地缓存。
+> **说明**：不传 layers 时默认返回 sea 与 land；全量路网体积较大，建议按图层按需请求并按 graphVersion 做本地缓存。
 
 **请求参数**
 
-无需请求参数。
+| 参数名 | 类型 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `layers` | `string` | 可选 | `undefined` | 逗号分隔的图层列表，支持 sea、land、road、air。 |
 
 **请求示例**
 
@@ -603,14 +611,23 @@ curl 'http://127.0.0.1:4180/v1/graph/links'
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `graphVersion` | `string` | 当前图谱版本。 |
+| `counts` | `object` | 各图层总边数：{ sea, land, road, air }。 |
 | `sea[]` | `object[]` | 海运航段数组，每项为 { mode: "sea", coords: [[lon, lat], ...] }。 |
-| `land[]` | `object[]` | 陆铁连线数组，每项为 { mode, coords: [[lon, lat], ...] }（支持 viaCoords 多折点沿海/山区走廊轨迹）。 |
+| `land[]` | `object[]` | 陆铁连线数组，每项为 { mode, from, to, corridor, distanceKm, coords: [[lon, lat], ...] }。 |
+| `road[]` | `object[]` | 全球公路网边数组，每项为 { mode: "road", coords: [[lon, lat], ...] }。 |
+| `air[]` | `array[]` | 航空航线紧凑元组数组，每项为 [fromIata, toIata, freq, crossesRussia]。 |
 
 **返回示例**
 
 ```json
 {
   "graphVersion": "9f3c...",
+  "counts": {
+    "sea": 12954,
+    "land": 83,
+    "road": 27368,
+    "air": 28323
+  },
   "sea": [
     {
       "mode": "sea",
@@ -629,6 +646,10 @@ curl 'http://127.0.0.1:4180/v1/graph/links'
   "land": [
     {
       "mode": "rail",
+      "from": "RAIL_SOUTHCHINA",
+      "to": "CNALA",
+      "corridor": "中欧班列西通道",
+      "distanceKm": 4120,
       "coords": [
         [
           114.05,
