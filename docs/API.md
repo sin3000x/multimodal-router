@@ -37,7 +37,8 @@
 ### 3. 咽喉耦合与空域绕行规则
 
 - **海运咽喉联动**：避让 `CP_SUEZ`（苏伊士运河）或 `CP_BAB`（曼德海峡）时，系统会自动联动阻断耦合航段，模拟经好望角（`CP_CAPE`）或港口陆桥接驳的真实绕行。
-- **空域穿行检测**：传入 `AS_RUSSIA` 或 `AS_MIDEAST` 时，空运路由器会检测大圆航线是否穿过受控空域，自动切换非俄/非中东中转枢纽绕飞。
+- **空域穿行与真实航网**：基于全球真实航线网（`airnet`）与全货机干线生成 0/1/2 次中转方案，默认常态避开乌克兰冲突空域；传入 `AS_RUSSIA` 或 `AS_MIDEAST` 时，优先尝试不落地空中走廊绕飞（如哈萨克—里海—黑海走廊、阿拉伯海—红海走廊）并保留经中东/东南亚/安克雷奇（`ANC`）技术经停或中转备选。
+- **陆路连通、港口分级与跨国清关**：海运选港按 `portTier`（1/2/3 级）排序并用 `land-mask` + `roadnet` 过滤隔海短驳；跨国公路/短驳自动叠加边境清关耗时与成本（`borderPenalty`）；手工走廊未覆盖的同大陆 OD 由全球干线公路网 A* 自动绕行。
 - **北极航线**：默认不启用北极通道，仅在显式允许时参与寻路。
 
 ### 4. 双层缓存与图谱版本
@@ -127,7 +128,7 @@ curl 'http://127.0.0.1:4180/v1/routes?from=CNSZX&to=NLAMS&modes=sea%2Cair%2Crail
 | `straightLineKm` | `number` | 起终点间大圆直线距离（公里）。 |
 | `avoid` | `string[]` | 本次生效的避让咽喉/空域 ID 列表。 |
 | `countsByMode` | `object` | 各运输方式（sea、air、rail、road、local）命中的候选路径总数。 |
-| `routes[]` | `object[]` | 候选路径列表，每条含 routeId、mode、modeLabel、likelihood、originGateway、destGateway、chokepoints[]、nodeSequence[]、waypoints[]、legs[]、metrics、signature。 |
+| `routes[]` | `object[]` | 候选路径列表，每条含 routeId、mode、modeLabel、likelihood、originGateway、destGateway、可选 viaHub / detourReason、chokepoints[]、nodeSequence[]、waypoints[]、legs[]（各分段含独立 leg.mode 供地图按分段着色）、metrics、signature。 |
 | `meta.cache` | `object` | 缓存命中信息：hit（布尔）、layer（memory / sqlite / inflight / miss）、key（SHA-256 缓存键）。 |
 
 **返回示例**
@@ -603,7 +604,7 @@ curl 'http://127.0.0.1:4180/v1/graph/links'
 | --- | --- | --- |
 | `graphVersion` | `string` | 当前图谱版本。 |
 | `sea[]` | `object[]` | 海运航段数组，每项为 { mode: "sea", coords: [[lon, lat], ...] }。 |
-| `land[]` | `object[]` | 陆铁连线数组，每项为 { mode, coords: [[lon1, lat1], [lon2, lat2]] }。 |
+| `land[]` | `object[]` | 陆铁连线数组，每项为 { mode, coords: [[lon, lat], ...] }（支持 viaCoords 多折点沿海/山区走廊轨迹）。 |
 
 **返回示例**
 
@@ -717,7 +718,7 @@ curl 'http://127.0.0.1:4180/health'
 | `service` | `string` | 服务标识（"multimodal-router"）。 |
 | `graphVersion` | `string` | 当前加载的图谱 SHA-256 版本。 |
 | `builtAt` | `string \| null` | 图谱最近编译时间（ISO 8601）。 |
-| `counts` | `object \| null` | 节点、海运边、陆铁边等图谱规模统计。 |
+| `counts` | `object \| null` | 节点、海运边、全球干线公路边（roadnetEdges）、航线边（airnetEdges）、陆铁走廊边（landEdges）等图谱规模统计。 |
 | `precomputed` | `object \| null` | 预计算快照概览（laneCount、generatedAt）。 |
 | `cache` | `object` | L1 内存与 L2 SQLite 缓存条目数及命中计数。 |
 
@@ -727,20 +728,24 @@ curl 'http://127.0.0.1:4180/health'
 {
   "ok": true,
   "service": "multimodal-router",
-  "graphVersion": "9f3c...",
-  "builtAt": "2026-11-25T01:00:00.000Z",
+  "graphVersion": "2b415c91c971",
+  "builtAt": "2026-11-25T06:45:48.747Z",
   "counts": {
-    "nodes": 2400,
+    "nodesTotal": 6801,
+    "marnetVertices": 6704,
     "marnetEdges": 12954,
-    "landEdges": 120
+    "roadnetVertices": 20045,
+    "roadnetEdges": 27368,
+    "airnetEdges": 28323,
+    "landEdges": 83
   },
   "precomputed": {
     "laneCount": 87,
-    "generatedAt": "2026-11-25T01:02:00.000Z"
+    "generatedAt": "2026-11-25T06:45:55.029Z"
   },
   "cache": {
     "memorySize": 0,
-    "sqliteEntries": 435,
+    "sqliteEntries": 1218,
     "memoryHits": 0,
     "sqliteHits": 0,
     "misses": 0

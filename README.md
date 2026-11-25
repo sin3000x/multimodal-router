@@ -7,11 +7,12 @@
 ## 数据来源
 
 - **MARNET 全球海运航道网** (`eurostat/searoute` / `genthalili/searoute-py` `marnet_searoute.geojson`)：4,109 条全球海上航段及 13 个咽喉标识（苏伊士、曼德、霍尔木兹、马六甲、巽他、好望角、直布罗陀、巴拿马等），编译时自动处理跨 180° 经线拼接与 T 型节点切分，形成全联通单连通分量（6,704 顶点 / 12,954 边）。
-- **全球港口位置表** (`ports.geojson`，含 UN/LOCODE)：与业务精选节点合并，通过空间网格自动吸附至 MARNET 海运顶点。
-- **OurAirports 全球机场库** (`airports.csv`，Public Domain)：筛选具备定期航班的 `large_airport` / `medium_airport` 及主要全球货运枢纽。
+- **全球港口位置表** (`ports.geojson`，含 UN/LOCODE)：与业务精选节点合并，按 `portTier`（Tier 1 远洋母港 / Tier 2 区域及绕行枢纽 / Tier 3 普通支线港）分级，并通过空间网格与陆地掩膜（`land-mask.mjs`）自动吸附至 MARNET 海运顶点，过滤隔海相望的无效短驳港口。
+- **OurAirports 全球机场库** (`airports.csv`，Public Domain) 与 **全球定期航线/全货机网** (`Jonty/airline-route-data` `airline_routes.json` + 全货机干线补充)：筛选具备定期航班的 `large_airport` / `medium_airport` 及主要货运枢纽，编译为 **28,323 条**航线边（`airnet`），支持真实 0/1/2 次中转、常态乌克兰禁飞区避让、空中走廊绕飞与安克雷奇（`ANC`）技术经停。
+- **Natural Earth 1:10m 全球干线公路网** (`ne_10m_roads.geojson`)：过滤轮渡与在建路段，经微断头焊接（`<= 3.5 km`）与二度节点拓扑缩并后形成紧凑陆路图 `roadnet`（20,045 顶点 / 27,368 边），支持同大陆任意节点 A* 沿陆路自动绕行（如威海→大连环渤海公路）。
 - **精选多式联运走廊** (`data/curated/`)：
-  - `chokepoints.json`：规范咽喉与空域映射（含 `CP_SUEZ` / `CP_BAB` 耦合与 `AS_RUSSIA` / `AS_MIDEAST` 大圆航线穿行检测盒）。
-  - `rail-land-corridors.json`：中欧班列北线（`CNALA` 阿拉山口 / `RB_KHORGOS` 霍尔果斯）、西伯利亚线（`CNMZH` 满洲里）、跨里海中间走廊（`KZAAU` 阿克套 - `AZBAK` 巴库渡运 - `GETBS` 第比利斯）及重点港口陆铁接驳。
+  - `chokepoints.json`：规范咽喉与空域映射（含 `CP_SUEZ` / `CP_BAB` 耦合、`AS_RUSSIA` 及精缩后的 `AS_MIDEAST` 冲突区检测盒）。
+  - `rail-land-corridors.json`：中欧班列北线（`CNALA` 阿拉山口 / `RB_KHORGOS` 霍尔果斯）、西伯利亚线（`CNMZH` 满洲里）、跨里海中间走廊（`KZAAU` 阿克套 - `AZBAK` 巴库渡运 - `GETBS` 第比利斯）、**中东非海陆联运骨架走廊**（海湾 GCC 红海↔波斯湾陆桥、阿曼/阿联酋绕霍尔木兹山区/沿海走廊、东非蒙内/坦赞铁路及内陆口岸）等共 83 条走廊边（支持 `viaCoords` 折线轨迹）。
   - `seed-nodes.json` & `cohort-od.json`：兼容 `supply-chain-risk-radar` 的业务节点与 87 条重点线路 OD 队列。
   - `public-node-names-zh.json`：按 UN/LOCODE 或 IATA 代码维护公开港口和机场的中文译名。更新公开数据后，构建会列出仍需补充中文名的节点。
 
@@ -20,7 +21,7 @@
 - **国家/地区 (`country`)**：直接使用 **ISO 3166-1 alpha-2**（如 `CN`、`NL`、`AE`、`SA`、`MX`）。
 - **机场 (`airport`)**：直接使用 **IATA 三字码**（如 `SZX`、`HKG`、`AMS`、`DXB`、`IST`、`ICN`、`LAX`）。
 - **港口与城市 (`port` / `city`)**：直接使用 **UN/LOCODE 五位码**（如 `CNSZX`、`CNYTN`、`CNSHK`、`HKHKG`、`NLRTM`、`NLAMS`、`AEJEA`、`SADMM`、`SAJED`、`MXLZC`、`MXVER`）；同址城市与港口（如 `HKHKG`、`TRIST`、`OMMCT`）统一合并为多职能节点（`functions: ['city', 'port']`）。
-- **陆铁枢纽与口岸**：有 UN/LOCODE 者复用标准码（`CNALA`、`PLMLW`、`CNMZH`、`RUZAB`、`DEDUI`、`KZAAU`、`AZBAK`、`GETBS`），无通用编码的咽喉/空域/边界走廊保留规范语义编码（`CP_*`、`AS_*`、`RB_KHORGOS`、`SEA_CASPIAN`）。
+- **陆铁枢纽与口岸**：有 UN/LOCODE 者复用标准码（`CNALA`、`PLMLW`、`CNMZH`、`RUZAB`、`DEDUI`、`KZAAU`、`AZBAK`、`GETBS`、`KENBO`、`UGKLA`、`ZMLUN`、`SDKRT`），无通用编码的咽喉/空域/边界走廊保留规范语义编码（`CP_*`、`AS_*`、`BORDER_*`、`RB_KHORGOS`、`SEA_CASPIAN`）。
 - **向后兼容**：保留旧编号（`CITY_SZ`、`PORT_YANTIAN`、`AP_SZX`、`CTY_CN` 等）在 `legacyIds` 与 `aliases` 中，传入旧编号会自动归一化至标准编码并共享同一缓存键。
 
 ## 避免冗余重算（参考 WorldMonitor 模式）
