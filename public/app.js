@@ -1856,7 +1856,7 @@ function initNodeGraph() {
     const checkbox = document.querySelector(`#chokepoint-list input[value="${CSS.escape(selectedGraphNode.id)}"]`);
     if (!checkbox) return;
     checkbox.checked = true;
-    updateActionButton();
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
     setMapView(routeView);
     const panel = document.getElementById('map-panel');
     if (document.fullscreenElement === panel || panel.classList.contains('map-maximized')) {
@@ -2329,6 +2329,107 @@ function updateActionButton() {
   }
 }
 
+function initAvoidPicker(chokepoints) {
+  const list = document.getElementById('chokepoint-list');
+  const search = document.getElementById('avoid-search');
+  const filters = [...document.querySelectorAll('[data-avoid-type]')];
+  const selected = document.getElementById('avoid-selected');
+  const toggleResults = document.getElementById('toggle-avoid-results');
+  const clear = document.getElementById('clear-avoid-btn');
+  const empty = document.getElementById('avoid-empty');
+  const sorted = [...chokepoints].sort(
+    (a, b) => Number(KEY_AVOID_IDS.has(b.id)) - Number(KEY_AVOID_IDS.has(a.id)) || b.affectedLaneCount - a.affectedLaneCount
+  );
+  const options = sorted.map((cp) => {
+    const row = document.createElement('div');
+    row.className = 'cp-item';
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.name = 'avoid';
+    checkbox.value = cp.id;
+    label.append(checkbox, cp.name_zh);
+    const count = document.createElement('span');
+    count.className = 'cp-count';
+    count.textContent = `${cp.affectedLaneCount} 线`;
+    row.append(label, count);
+    list.append(row);
+
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'avoid-chip hidden';
+    chip.textContent = `${cp.name_zh} ×`;
+    chip.setAttribute('aria-label', `移除${cp.name_zh}`);
+    chip.onclick = () => {
+      checkbox.checked = false;
+      syncSelection();
+      (selected.querySelector('button:not(.hidden)') ?? search).focus();
+    };
+    selected.append(chip);
+
+    return {
+      row, checkbox, chip,
+      type: cp.type === 'airspace' ? 'air' : 'sea',
+      searchText: [cp.name_zh, cp.name_en, cp.id].join(' ').toLowerCase(),
+    };
+  });
+  let activeType = '';
+  let visibleOptions = options;
+
+  function syncBulkButton() {
+    toggleResults.disabled = visibleOptions.length === 0;
+    const allSelected = visibleOptions.length > 0 && visibleOptions.every(({ checkbox }) => checkbox.checked);
+    toggleResults.textContent = allSelected ? '取消全选结果' : '全选结果';
+  }
+
+  function syncSelection() {
+    for (const { checkbox, chip } of options) {
+      chip.classList.toggle('hidden', !checkbox.checked);
+    }
+    syncBulkButton();
+    updateActionButton();
+  }
+
+  function applyFilters() {
+    const terms = search.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    visibleOptions = [];
+    for (const option of options) {
+      const matches = (!activeType || activeType === option.type) &&
+        terms.every((term) => option.searchText.includes(term));
+      option.row.classList.toggle('hidden', !matches);
+      if (matches) visibleOptions.push(option);
+    }
+    empty.classList.toggle('hidden', visibleOptions.length > 0);
+    list.scrollTop = 0;
+    syncBulkButton();
+  }
+
+  for (const button of filters) {
+    button.onclick = () => {
+      activeType = button.dataset.avoidType;
+      for (const filter of filters) {
+        filter.setAttribute('aria-pressed', String(filter === button));
+      }
+      applyFilters();
+    };
+  }
+  search.addEventListener('input', applyFilters);
+  list.addEventListener('change', syncSelection);
+  toggleResults.onclick = () => {
+    const checked = visibleOptions.some(({ checkbox }) => !checkbox.checked);
+    for (const { checkbox } of visibleOptions) checkbox.checked = checked;
+    syncSelection();
+  };
+  clear.onclick = () => {
+    for (const { checkbox } of options) checkbox.checked = false;
+    syncSelection();
+    search.focus();
+    runQuery();
+  };
+  applyFilters();
+  syncSelection();
+}
+
 function getRoutePayload() {
   return {
     from: endpointPickers.from.value,
@@ -2421,20 +2522,7 @@ async function init() {
 
   const cpRes = await fetchJson('/v1/chokepoints');
   chokepointNameById = new Map(cpRes.chokepoints.map((cp) => [cp.id, cp.name_zh]));
-
-  const cpList = document.getElementById('chokepoint-list');
-  const sortedCps = [...cpRes.chokepoints].sort(
-    (a, b) => Number(KEY_AVOID_IDS.has(b.id)) - Number(KEY_AVOID_IDS.has(a.id)) || b.affectedLaneCount - a.affectedLaneCount
-  );
-  for (const cp of sortedCps) {
-    const row = document.createElement('div');
-    row.className = 'cp-item';
-    row.innerHTML = `
-      <label><input type="checkbox" name="avoid" value="${cp.id}" /> ${cp.name_zh}</label>
-      <span class="cp-count">${cp.affectedLaneCount} 线</span>
-    `;
-    cpList.appendChild(row);
-  }
+  initAvoidPicker(cpRes.chokepoints);
 
   for (const btn of document.querySelectorAll('.preset-btn')) {
     btn.onclick = () => {
@@ -2460,17 +2548,8 @@ async function init() {
     renderComparePanel();
   };
 
-  cpList.addEventListener('change', updateActionButton);
-  document.getElementById('clear-avoid-btn').onclick = () => {
-    for (const el of document.querySelectorAll('input[name="avoid"]:checked')) {
-      el.checked = false;
-    }
-    updateActionButton();
-    runQuery();
-  };
   document.getElementById('run-btn').onclick = () => runQuery();
 
-  updateActionButton();
   await runQuery();
 }
 

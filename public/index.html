@@ -74,11 +74,26 @@
           <div class="panel-head">
             <h2>咽喉 / 空域受阻模拟 (Avoid)</h2>
             <div id="avoid-meta" class="avoid-meta hidden">
-              <span id="avoid-count" class="avoid-count"></span>
+              <span id="avoid-count" class="avoid-count" aria-live="polite"></span>
               <button id="clear-avoid-btn" type="button" class="link-btn">清空</button>
             </div>
           </div>
-          <div id="chokepoint-list" class="chokepoint-list"></div>
+          <div id="avoid-selected" class="avoid-selected"></div>
+          <div class="field avoid-search">
+            <input id="avoid-search" type="search" aria-label="搜索咽喉或空域"
+              placeholder="搜索中文名、英文名或 ID" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="avoid-toolbar">
+            <div class="avoid-filters" role="group" aria-label="避让类型">
+              <button type="button" class="map-btn" data-avoid-type="" aria-pressed="true">全部</button>
+              <button type="button" class="map-btn" data-avoid-type="sea" aria-pressed="false">海运咽喉</button>
+              <button type="button" class="map-btn" data-avoid-type="air" aria-pressed="false">空域</button>
+            </div>
+            <button id="toggle-avoid-results" type="button" class="link-btn" disabled>全选结果</button>
+          </div>
+          <div id="chokepoint-list" class="chokepoint-list" role="group" aria-label="可选咽喉与空域">
+            <p id="avoid-empty" class="avoid-empty hidden" role="status">无匹配项</p>
+          </div>
         </section>
       </div>
 
