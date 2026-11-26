@@ -50,6 +50,7 @@ export function createAirRouter(graph) {
     airAdj.get(v).set(u, meta);
   }
   const hasAirnet = airAdj.size > 0;
+  const gatewayAirports = hasAirnet ? airports.filter((airport) => airAdj.has(airport.id)) : airports;
 
   function getAirEdge(aId, bId) {
     return airAdj.get(aId)?.get(bId) ?? null;
@@ -57,10 +58,11 @@ export function createAirRouter(graph) {
 
   function selectGatewayAirports(node, { maxKm = 220, limit = 2 } = {}) {
     if (node.type === 'airport' || node.type === 'hub_airport') {
+      if (hasAirnet && !airAdj.has(node.id)) return [];
       return [{ airport: node, drayageKm: 0 }];
     }
     const candidates = [];
-    for (const ap of airports) {
+    for (const ap of gatewayAirports) {
       const d = haversineKm(node.lon, node.lat, ap.lon, ap.lat);
       if (d <= maxKm) {
         const routeBonus = Math.min(30, (ap.routeCount ?? 0) * 0.15);
@@ -400,6 +402,7 @@ export function createAirRouter(graph) {
     const hubOptions = [];
     for (const oaCand of originAps) {
       const neighbors = hasAirnet ? airAdj.get(oaCand.airport.id) : null;
+      if (hasAirnet && !neighbors) continue;
       const pool = neighbors
         ? [...neighbors.keys()].map((id) => airportById.get(id)).filter(Boolean)
         : cargoHubs;

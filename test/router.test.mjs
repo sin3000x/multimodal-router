@@ -320,6 +320,19 @@ test('Global roadnet routes overland around Bohai Bay for Weihai -> Dalian (CNWE
   assert.ok(geom.some(([lon, lat]) => lon < 118.5 && lat > 38.8), 'should detour west/north around Bohai Bay');
 });
 
+test('USLAX to DEHAM returns sea and air routes with default modes', () => {
+  const { routes } = router.findRoutes({ from: 'USLAX', to: 'DEHAM' });
+
+  assert.ok(routes.some((route) => route.mode === 'sea' && route.chokepoints.some(({ id }) => id === 'CP_PANAMA')));
+  assert.ok(routes.some((route) => route.mode === 'air'));
+});
+
+test('Air gateways skip airports without scheduled routes before ranking candidates', () => {
+  const { routes } = router.findRoutes({ from: 'CAMID', to: 'DEHAM', modes: ['air'] });
+
+  assert.ok(routes.some((route) => route.originGateway.id === 'YYZ'));
+});
+
 test('Real airnet prevents fake intercontinental non-stops, avoids Ukraine by default, and models ANC tech-stop & corridor detours', () => {
   // No fake non-stop to Entebbe (Uganda) or Bogota (Colombia)
   const klaAir = router.findRoutes({ from: 'CNSZX', to: 'UGKLA', modes: ['air'], maxRoutes: 6 }).routes;

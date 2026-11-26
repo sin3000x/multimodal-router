@@ -3,6 +3,9 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+// Routing changes can invalidate cached results even when the graph is unchanged.
+const ROUTING_VERSION = 2;
+
 function canonicalParams(params = {}) {
   const normList = (v) =>
     [...new Set((Array.isArray(v) ? v : String(v ?? '').split(',')).map((s) => s.trim()).filter(Boolean))].sort();
@@ -61,6 +64,7 @@ export function createRouteCache({
   function makeKey(kind, params) {
     const body = JSON.stringify({
       graphVersion,
+      routingVersion: ROUTING_VERSION,
       kind,
       ...canonicalParams(params),
     });
