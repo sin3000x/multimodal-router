@@ -139,6 +139,9 @@
   .world-map-labels path { fill: none; stroke: currentColor; stroke-width: 1.5; }
   .world-map-labels circle { fill: currentColor; stroke: #fff; stroke-width: 1.5; }
   .world-map-labels text { fill: var(--ink); stroke: #f0f9ff; stroke-width: 4; stroke-linejoin: round; paint-order: stroke; font-size: 16px; font-weight: 720; }
+  .world-map-labels .passage-label { color: var(--risk); }
+  .world-map-labels .passage-label circle { fill: #fff; stroke: currentColor; stroke-width: 2; }
+  .world-map-labels .passage-label text { fill: var(--risk); }
   .world-legend { display: flex; justify-content: center; gap: 24px; margin-top: 9px; font-size: 16px; font-weight: 720; }
   .world-legend strong { color: var(--ink); font-variant-numeric: tabular-nums; }
   .world-legend .node-key::before { width: 8px; height: 8px; border: 0; border-radius: 50%; background: currentColor; }
@@ -586,21 +589,36 @@ SOFTWARE.
       <figure>
         <div class="world-map-frame">
           <img class="world-map" data-global-graph alt="全球港口、机场、海运、航空、公路、陆铁走廊和关键海运通道分布">
-          <svg class="world-map-labels" viewBox="0 0 1180 530" role="img" aria-label="案例港口：蛇口港、杰贝阿里港、蒙巴萨港">
-            <g data-node="CNSHK">
-              <path d="M963.3 219.4l18 13h10" />
-              <circle cx="963.3" cy="219.4" r="4" />
-              <text x="996" y="237">蛇口港</text>
+          <svg class="world-map-labels" viewBox="0 0 1180 530" role="img" aria-label="关键航运咽喉">
+            <g data-node="CP_PANAMA" class="passage-label">
+              <path d="M328.8 272.6L312.8 291.6H305.8" />
+              <circle cx="328.8" cy="272.6" r="4" />
+              <text x="300.8" y="296.6" text-anchor="end">巴拿马运河</text>
             </g>
-            <g data-node="AEJEA">
-              <path d="M770.4 209.5l17 19h10" />
-              <circle cx="770.4" cy="209.5" r="4" />
-              <text x="802" y="233">杰贝阿里港</text>
+            <g data-node="CP_GIBRALTAR" class="passage-label">
+              <path d="M572.0 166.3L558.0 184.3H551.0" />
+              <circle cx="572.0" cy="166.3" r="4" />
+              <text x="546.0" y="189.3" text-anchor="end">直布罗陀海峡</text>
             </g>
-            <g data-node="KEMBA">
-              <path d="M720 324.5l17 17h10" />
-              <circle cx="720" cy="324.5" r="4" />
-              <text x="752" y="346">蒙巴萨港</text>
+            <g data-node="CP_SUEZ" class="passage-label">
+              <path d="M696.0 187.6L676.0 212.6H669.0" />
+              <circle cx="696.0" cy="187.6" r="4" />
+              <text x="664.0" y="217.6" text-anchor="end">苏伊士运河</text>
+            </g>
+            <g data-node="CP_HORMUZ" class="passage-label">
+              <path d="M774.4 203.5L792.4 180.5H799.4" />
+              <circle cx="774.4" cy="203.5" r="4" />
+              <text x="804.4" y="185.5" text-anchor="start">霍尔木兹海峡</text>
+            </g>
+            <g data-node="CP_CAPE" class="passage-label">
+              <path d="M650.5 444.4L668.5 463.4H675.5" />
+              <circle cx="650.5" cy="444.4" r="4" />
+              <text x="680.5" y="468.4" text-anchor="start">好望角</text>
+            </g>
+            <g data-node="CP_MALACCA" class="passage-label">
+              <path d="M922.7 298.6L903.7 316.6H896.7" />
+              <circle cx="922.7" cy="298.6" r="4" />
+              <text x="891.7" y="321.6" text-anchor="end">马六甲海峡</text>
             </g>
           </svg>
         </div>
