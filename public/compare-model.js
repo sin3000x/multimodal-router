@@ -24,6 +24,7 @@ export function routeSignature(route) {
     route.viaHub?.id ?? '',
     route.destGateway?.id ?? '',
     cps,
+    (route.nodeSequence ?? []).join(','),
     route.metrics?.distanceKm ?? '',
     route.metrics?.transitDays ?? '',
   ].join('|');
@@ -66,11 +67,11 @@ function sortByFastest(list) {
   );
 }
 
-export function buildCompareModel(compareData, chokepointNameById = new Map()) {
+export function buildCompareModel(compareData, avoidNameById = new Map()) {
   const avoidIds = compareData.avoid ?? [];
   const avoidSet = new Set(avoidIds);
   const hasAvoid = avoidIds.length > 0;
-  const avoidNames = avoidIds.map((id) => chokepointNameById.get(id) || id);
+  const avoidNames = avoidIds.map((id) => avoidNameById.get(id) || id);
 
   const affectedRawIds = new Set((compareData.affected || []).map((r) => r.routeId));
 

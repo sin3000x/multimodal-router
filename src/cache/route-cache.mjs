@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 // Routing changes can invalidate cached results even when the graph is unchanged.
-const ROUTING_VERSION = 2;
+const ROUTING_VERSION = 3;
 
 function canonicalParams(params = {}) {
   const normList = (v) =>

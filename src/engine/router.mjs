@@ -244,6 +244,8 @@ export function createRouter(compiledGraph) {
 
     const requestedModes = new Set(Array.isArray(modes) ? modes : String(modes).split(',').map((s) => s.trim()).filter(Boolean));
     const avoidSet = new Set(Array.isArray(avoid) ? avoid : String(avoid).split(',').map((s) => s.trim()).filter(Boolean));
+    avoidSet.delete(originNode.id);
+    avoidSet.delete(destNode.id);
 
     const byMode = {
       sea: [],
@@ -319,13 +321,12 @@ export function createRouter(compiledGraph) {
     maxRoutes = 8,
     includeGeometry = false,
   }) {
-    const avoidList = [...new Set(avoid)];
     const baseline = findRoutes({ from, to, modes, avoid: [], maxRoutes: 12, includeGeometry });
-    const disrupted = findRoutes({ from, to, modes, avoid: avoidList, maxRoutes: 12, includeGeometry });
+    const disrupted = findRoutes({ from, to, modes, avoid, maxRoutes: 12, includeGeometry });
 
-    const avoidSet = new Set(avoidList);
-    const expandedAvoid = new Set(avoidList);
-    for (const id of avoidList) {
+    const avoidSet = new Set(disrupted.avoid);
+    const expandedAvoid = new Set(avoidSet);
+    for (const id of avoidSet) {
       for (const c of compiledGraph.chokepoints?.coupledPassages?.[id] ?? []) expandedAvoid.add(c);
     }
 
@@ -338,6 +339,7 @@ export function createRouter(compiledGraph) {
     }
 
     const affected = baseline.routes.filter((r) =>
+      r.nodeSequence.some((id) => expandedAvoid.has(id)) ||
       r.chokepoints.some((cp) => expandedAvoid.has(cp.id))
     );
 

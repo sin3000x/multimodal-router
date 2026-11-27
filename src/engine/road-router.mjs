@@ -52,6 +52,15 @@ export function createRoadRouter(graph) {
   }
 
   const V = vertices.length;
+  const borderById = new Map();
+  const bordersByVertex = new Map();
+  for (const node of graph.nodes ?? []) {
+    if (node.type !== 'border' || node.roadVertexId == null) continue;
+    borderById.set(node.id, node.roadVertexId);
+    const ids = bordersByVertex.get(node.roadVertexId) ?? [];
+    ids.push(node.id);
+    bordersByVertex.set(node.roadVertexId, ids);
+  }
   const adjacency = Array.from({ length: V }, () => []);
   for (let i = 0; i < edges.length; i++) {
     const edge = edges[i];
@@ -106,7 +115,7 @@ export function createRoadRouter(graph) {
   let currentStamp = 0;
   const heap = new MinHeap();
 
-  function findRoadPath(fromNode, toNode, { maxRoadKm = 6500, includeGeometry = false } = {}) {
+  function findRoadPath(fromNode, toNode, { maxRoadKm = 6500, includeGeometry = false, avoidSet } = {}) {
     if (!fromNode || !toNode) return null;
     const startSnap =
       fromNode.roadVertexId != null
@@ -120,6 +129,11 @@ export function createRoadRouter(graph) {
     if (!startSnap || !endSnap) return null;
     const u0 = startSnap.id;
     const v0 = endSnap.id;
+    const blockedVertices = new Set();
+    for (const id of avoidSet ?? []) {
+      const vertex = borderById.get(id);
+      if (vertex != null) blockedVertices.add(vertex);
+    }
 
     if (vertices[u0]?.comp !== vertices[v0]?.comp) return null;
 
@@ -166,7 +180,7 @@ export function createRoadRouter(graph) {
       if (gU > maxRoadKm) continue;
 
       for (const adj of adjacency[u]) {
-        if (closedStamp[adj.to] === stamp) continue;
+        if (closedStamp[adj.to] === stamp || (adj.to !== v0 && blockedVertices.has(adj.to))) continue;
         const edge = edges[adj.edgeId];
         const nextG = gU + edge.distanceKm;
         if (nextG > maxRoadKm) continue;
@@ -189,14 +203,20 @@ export function createRoadRouter(graph) {
     if (!found) return null;
 
     const steps = [];
+    const viaNodes = [];
     let curr = v0;
     while (curr !== u0) {
       const eId = prevEdge[curr];
       if (eId === -1) return null;
       steps.push({ edgeId: eId, reverse: prevDir[curr] === 1 });
       curr = prevVertex[curr];
+      if (curr !== u0) {
+        const borders = bordersByVertex.get(curr);
+        if (borders) viaNodes.push(...borders.toReversed());
+      }
     }
     steps.reverse();
+    viaNodes.reverse();
 
     let roadDistanceKm = 0;
     const roadCoords = [];
@@ -240,7 +260,7 @@ export function createRoadRouter(graph) {
       coords = decimateCoords(full, 90);
     }
 
-    return { distanceKm: totalKm, border, coords };
+    return { distanceKm: totalKm, border, coords, viaNodes };
   }
 
   return { findRoadPath };

@@ -10,7 +10,7 @@
 | 分组 | 方法 | 路径 | 名称 | 说明 |
 | --- | --- | --- | --- | --- |
 | 核心计算 | `POST / GET` | `/v1/routes` | 路径计算 | 根据起终点、运输方式和避让条件，计算多式联运候选路径与时效/里程/成本指标。 |
-| 核心计算 | `POST / GET` | `/v1/routes/compare` | 绕行对比 | 对比无阻断基线路径与指定咽喉/空域受阻后的绕行及陆路替代方案，量化时效与成本影响。 |
+| 核心计算 | `POST / GET` | `/v1/routes/compare` | 绕行对比 | 对比无阻断基线路径与指定节点、咽喉或空域受阻后的绕行及陆路替代方案，量化时效与成本影响。 |
 | 核心计算 | `POST` | `/v1/precompute` | 批量预热 | 批量计算指定 OD 对与避让场景组合并写入双层缓存（内存 LRU + SQLite）。 |
 | 词表与图谱 | `GET` | `/v1/nodes` | 节点搜索 | 按中英文名称、UN/LOCODE、IATA 三字码、别名或港群前缀检索可路由节点。 |
 | 词表与图谱 | `GET` | `/v1/chokepoints` | 咽喉与空域 | 获取全部规范海运咽喉与受控空域列表，以及预计算队列中的受影响线路统计。 |
@@ -34,8 +34,9 @@
 - **解析顺序**：精确 `id` → 历史旧 ID（`legacyIds`，如 `CITY_SZ` → `CNSZX`）→ 经纬度字符串（`"114.05,22.54"`）或对象（`{"lon":114.05,"lat":22.54}`）→ `code` → 中英文别名。
 - **等价归一化**：不同别名（如 `"深圳"`、`"CITY_SZ"`、`"CNSZX"`）在服务端会被规范化为同一标准 ID 并共享同一缓存键。
 
-### 3. 咽喉耦合与空域绕行规则
+### 3. 节点避让、咽喉耦合与空域绕行规则
 
+- **途经节点**：可将港口、机场、陆路枢纽或口岸的标准节点 ID 加入 avoid。避让按图谱节点生效，查询起点和终点仍为必经点。
 - **海运咽喉联动**：避让 `CP_SUEZ`（苏伊士运河）或 `CP_BAB`（曼德海峡）时，系统会自动联动阻断耦合航段，模拟经好望角（`CP_CAPE`）或港口陆桥接驳的真实绕行。
 - **空域穿行与真实航网**：基于全球真实航线网（`airnet`）与全货机干线生成 0/1/2 次中转方案，默认常态避开乌克兰冲突空域；传入 `AS_RUSSIA` 或 `AS_MIDEAST` 时，优先尝试不落地空中走廊绕飞（如哈萨克—里海—黑海走廊、阿拉伯海—红海走廊）并保留经中东/东南亚/安克雷奇（`ANC`）技术经停或中转备选。
 - **陆路连通、港口分级与跨国清关**：海运选港按 `portTier`（1/2/3 级）排序并用 `land-mask` + `roadnet` 过滤隔海短驳；跨国公路/短驳自动叠加边境清关耗时与成本（`borderPenalty`）；手工走廊未覆盖的同大陆 OD 由全球干线公路网 A* 自动绕行。
@@ -78,7 +79,7 @@
 | `from` | `string \| object` | 必填 | `—` | 起运地节点。优先使用词表标准 ID（如 CNSZX、PVG），也支持中英文别名、旧 ID（如 CITY_SZ）或坐标（"114.05,22.54" / {"lon":114.05,"lat":22.54}）。 |
 | `to` | `string \| object` | 必填 | `—` | 目的地节点，解析规则同 from（如 NLAMS、AEDXB）。 |
 | `modes` | `string[] \| string` | 可选 | `["sea","air","rail","road"]` | 启用的运输方式。可选值：sea（海运）、air（空运）、rail（铁路）、road（公路）；GET 请求可用英文逗号分隔。 |
-| `avoid` | `string[] \| string` | 可选 | `[]` | 需避让的咽喉或空域 ID 列表（如 ["CP_SUEZ"]、["AS_RUSSIA"]）；GET 请求可用英文逗号分隔。 |
+| `avoid` | `string[] \| string` | 可选 | `[]` | 需避让的途经节点、咽喉或空域 ID 列表（如 ["NLRTM", "CP_SUEZ", "AS_RUSSIA"]）。起终点仍为必经点；GET 请求可用英文逗号分隔。 |
 | `maxRoutes` | `number` | 可选 | `8` | 返回路径数量上限，有效范围 1–24（各运输方式轮询交叉选取以保留多样性）。 |
 | `includeGeometry` | `boolean` | 可选 | `false` | 是否在分段 legs 中返回完整经纬度折线坐标数组 geometry（用于地图渲染，开启会增加响应体积）。 |
 
@@ -126,7 +127,7 @@ curl 'http://127.0.0.1:4180/v1/routes?from=CNSZX&to=NLAMS&modes=sea%2Cair%2Crail
 | `graphVersion` | `string` | 当前编译图谱的确定性 SHA-256 指纹版本。 |
 | `origin / destination` | `object` | 归一化后的起终点信息（含 id、type、code、codeStandard、name_zh、name_en、lon、lat）。 |
 | `straightLineKm` | `number` | 起终点间大圆直线距离（公里）。 |
-| `avoid` | `string[]` | 本次生效的避让咽喉/空域 ID 列表。 |
+| `avoid` | `string[]` | 本次生效的避让 ID 列表。 |
 | `countsByMode` | `object` | 各运输方式（sea、air、rail、road、local）命中的候选路径总数。 |
 | `routes[]` | `object[]` | 候选路径列表，每条含 routeId、mode、modeLabel、likelihood、originGateway、destGateway、可选 viaHub / detourReason、chokepoints[]、nodeSequence[]、waypoints[]、legs[]（各分段含独立 leg.mode 供地图按分段着色）、metrics、signature。 |
 | `meta.cache` | `object` | 缓存命中信息：hit（布尔）、layer（memory / sqlite / inflight / miss）、key（SHA-256 缓存键）。 |
@@ -208,7 +209,7 @@ curl 'http://127.0.0.1:4180/v1/routes?from=CNSZX&to=NLAMS&modes=sea%2Cair%2Crail
 
 #### `POST / GET /v1/routes/compare` · 绕行对比
 
-对比无阻断基线路径与指定咽喉/空域受阻后的绕行及陆路替代方案，量化时效与成本影响。
+对比无阻断基线路径与指定节点、咽喉或空域受阻后的绕行及陆路替代方案，量化时效与成本影响。
 
 > **说明**：避让 CP_SUEZ / CP_BAB 会自动联动耦合通道；避让 AS_RUSSIA / AS_MIDEAST 会触发空运绕飞检测。基线与绕行组内部各自计算最多 12 条路径后再按 maxRoutes 截断。
 
@@ -219,7 +220,7 @@ curl 'http://127.0.0.1:4180/v1/routes?from=CNSZX&to=NLAMS&modes=sea%2Cair%2Crail
 | `from` | `string \| object` | 必填 | `—` | 起运地节点。优先使用词表标准 ID（如 CNSZX、PVG），也支持中英文别名、旧 ID（如 CITY_SZ）或坐标（"114.05,22.54" / {"lon":114.05,"lat":22.54}）。 |
 | `to` | `string \| object` | 必填 | `—` | 目的地节点，解析规则同 from（如 NLAMS、AEDXB）。 |
 | `modes` | `string[] \| string` | 可选 | `["sea","air","rail","road"]` | 启用的运输方式。可选值：sea（海运）、air（空运）、rail（铁路）、road（公路）；GET 请求可用英文逗号分隔。 |
-| `avoid` | `string[] \| string` | 可选 | `[]` | 受阻或需避让的咽喉/空域 ID 列表（如 ["CP_SUEZ"]）。基线组固定按空列表计算，绕行组按此列表计算。 |
+| `avoid` | `string[] \| string` | 可选 | `[]` | 需避让的途经节点、咽喉或空域 ID 列表（如 ["NLRTM", "CP_SUEZ"]）。基线组按空列表计算，绕行组按此列表计算，起终点仍为必经点。 |
 | `maxRoutes` | `number` | 可选 | `8` | 返回路径数量上限，有效范围 1–24（各运输方式轮询交叉选取以保留多样性）。 |
 | `includeGeometry` | `boolean` | 可选 | `false` | 是否在分段 legs 中返回完整经纬度折线坐标数组 geometry（用于地图渲染，开启会增加响应体积）。 |
 
@@ -270,9 +271,9 @@ curl 'http://127.0.0.1:4180/v1/routes/compare?from=CNSZX&to=NLAMS&modes=sea%2Cai
 | --- | --- | --- |
 | `graphVersion` | `string` | 当前图谱版本。 |
 | `origin / destination` | `object` | 归一化后的起终点对象。 |
-| `avoid` | `string[]` | 去重后的受阻咽喉/空域 ID 列表。 |
+| `avoid` | `string[]` | 去重后的生效避让 ID 列表。 |
 | `baseline[]` | `object[]` | 无阻断情况下的基线路径列表（按 maxRoutes 截断）。 |
-| `affected[]` | `object[]` | 基线路径中经由受阻咽喉/空域（含耦合通道）的受影响路径。 |
+| `affected[]` | `object[]` | 基线路径中经由避让节点、咽喉或空域（含耦合通道）的受影响路径。 |
 | `alternatives[]` | `object[]` | 绕行后的海运/空运备选方案，附加 deltaDays（天数变化）与 costMultiplier（成本倍率）。 |
 | `landSubstitutions[]` | `object[]` | 铁路/公路等陆路替代方案，同样附加 deltaDays 与 costMultiplier。 |
 | `impactSummary` | `object` | 影响汇总：affectedBaselineRoutes、totalBaselineRoutes、seaCutOff、seaDetoured、survivingSeaCount、bestAlternativeDays、bestLandDays。 |
@@ -349,7 +350,7 @@ curl 'http://127.0.0.1:4180/v1/routes/compare?from=CNSZX&to=NLAMS&modes=sea%2Cai
 | 参数名 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | `pairs` | `Array<{from, to, modes?, avoid?}>` | 可选 | `预置 87 条 OD` | 起终点对数组。每项可单独覆盖全局的 modes 与 avoid。 |
-| `avoidScenarios` | `string[][]` | 可选 | `[[]]` | 避让场景列表，每项为一组咽喉/空域 ID，将与 pairs 做笛卡尔积预热。 |
+| `avoidScenarios` | `string[][]` | 可选 | `[[]]` | 避让场景列表，每项为一组途经节点、咽喉或空域 ID，将与 pairs 做笛卡尔积预热。 |
 | `modes` | `string[]` | 可选 | `["sea","air","rail","road"]` | 默认启用的运输方式数组（当单条 pair 未指定 modes 时生效）。 |
 | `maxRoutes` | `number` | 可选 | `8` | 每组场景计算的路径上限，范围 1–24。 |
 | `includeGeometry` | `boolean` | 可选 | `true` | 预热缓存时是否一并保存几何坐标（此接口默认 true）。 |

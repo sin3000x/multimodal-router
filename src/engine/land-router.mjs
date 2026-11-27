@@ -232,6 +232,7 @@ export function createLandRouter(graph) {
       const roadPath = findRoadPath(originNode, destNode, {
         maxRoadKm: maxAllowedKm,
         includeGeometry,
+        avoidSet,
       });
       if (roadPath && roadPath.distanceKm <= maxAllowedKm) {
         const corridor = sameCountry ? '干线公路网' : '跨国干线公路';
@@ -264,7 +265,7 @@ export function createLandRouter(graph) {
           originGateway: { id: originNode.id, name: originNode.name_zh || originNode.name_en, code: originNode.code ?? null },
           destGateway: { id: destNode.id, name: destNode.name_zh || destNode.name_en, code: destNode.code ?? null },
           chokepoints: [],
-          nodeSequence: [originNode.id, destNode.id],
+          nodeSequence: [originNode.id, ...(roadPath.viaNodes ?? []), destNode.id],
           legs,
           metrics,
           signature: sig,

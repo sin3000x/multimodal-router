@@ -164,7 +164,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
     );
   }
 
-  function findCorridorPorts(startNode, maxCorridorKm = 2400) {
+  function findCorridorPorts(startNode, maxCorridorKm, avoidSet) {
     const dist = new Map([[startNode.id, 0]]);
     const prev = new Map();
     const visited = new Set();
@@ -188,7 +188,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
       if (d >= maxCorridorKm) continue;
 
       for (const edge of landConnectionsByNode.get(u) ?? []) {
-        if (visited.has(edge.to)) continue;
+        if (visited.has(edge.to) || avoidSet?.has(edge.to)) continue;
         const nd = d + edge.distanceKm;
         if (nd <= maxCorridorKm && nd < (dist.get(edge.to) ?? Infinity)) {
           dist.set(edge.to, nd);
@@ -239,6 +239,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
         drayageKm: totalKm,
         drayageMode,
         viaCorridor: edgesPath.map((e) => e.corridor).filter(Boolean).join(' / ') || null,
+        viaNodes: edgesPath.slice(0, -1).map((edge) => edge.to),
         drayageCoords: drayageCoords.length >= 2 ? drayageCoords : null,
         border,
         preferred: true,
@@ -249,7 +250,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
     });
   }
 
-  function selectGatewayPorts(node, { maxDistanceKm = 260, limit = 4 } = {}) {
+  function selectGatewayPorts(node, { maxDistanceKm = 260, limit = 4, avoidSet } = {}) {
     if (node.type === 'port' && node.marnetVertexId != null) {
       return [
         {
@@ -268,6 +269,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
 
     // 1. Explicitly modeled inland-to-port corridors (can exceed 260 km, e.g. Riyadh <-> Jeddah/Dammam)
     for (const edge of landConnectionsByNode.get(node.id) ?? []) {
+      if (avoidSet?.has(edge.to)) continue;
       const target = nodeById.get(edge.to);
       if (
         (target?.type === 'port' || (target?.type === 'city' && target?.isCuratedPort)) &&
@@ -296,7 +298,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
     // 2. Nearby snapped maritime ports deduplicated by MARNET vertex
     const pool = [...candidates.values()];
     for (const port of ports) {
-      if (candidates.has(port.id)) continue;
+      if (candidates.has(port.id) || avoidSet?.has(port.id)) continue;
       const d = haversineKm(node.lon, node.lat, port.lon, port.lat);
       if (d <= maxDistanceKm) {
         const isHomePort =
@@ -350,10 +352,11 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
           if (graph.roadnet.vertices[node.roadVertexId].comp !== graph.roadnet.vertices[item.port.roadVertexId].comp) {
             continue;
           }
-          const rp = findRoadPath(node, item.port, { maxRoadKm: maxDistanceKm * 2.6, includeGeometry: true });
+          const rp = findRoadPath(node, item.port, { maxRoadKm: maxDistanceKm * 2.6, includeGeometry: true, avoidSet });
           if (!rp) continue;
           item.drayageKm = rp.distanceKm;
           item.drayageCoords = rp.coords;
+          item.viaNodes = rp.viaNodes;
           item.border = rp.border;
         }
       }
@@ -363,7 +366,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
 
     // 3. Multi-hop corridor fallback for landlocked inland cities/hubs (e.g. Kampala -> Mombasa)
     if (out.length === 0) {
-      const corridorPorts = findCorridorPorts(node, 2400).sort((a, b) => a.score - b.score);
+      const corridorPorts = findCorridorPorts(node, 2400, avoidSet).sort((a, b) => a.score - b.score);
       for (const item of corridorPorts) {
         if (out.length >= 2) break;
         if (seenVertices.has(item.port.marnetVertexId)) continue;
@@ -376,7 +379,7 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
     if (out.length === 0) {
       const fallback = [];
       for (const port of ports) {
-        if (!port.isMajor && !port.curated) continue;
+        if ((!port.isMajor && !port.curated) || avoidSet?.has(port.id)) continue;
         const d = haversineKm(node.lon, node.lat, port.lon, port.lat);
         if (d <= 900) fallback.push({ port, drayageKm: +d.toFixed(1) });
       }
@@ -498,6 +501,10 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
     const nodeSequence = [];
     for (const leg of legs) {
       if (!nodeSequence.length) nodeSequence.push(leg.from);
+      if (leg.kind === 'drayage') {
+        const viaNodes = leg.from === originNode.id ? og.viaNodes : dg.viaNodes?.toReversed();
+        nodeSequence.push(...(viaNodes ?? []));
+      }
       if (leg.kind === 'trunk' && leg.passages?.length) {
         for (const cp of leg.passages) nodeSequence.push(cp);
       }
@@ -530,8 +537,8 @@ export function createSeaRouter(graph, landConnectionsByNode = new Map(), portGr
     destNode,
     { avoidSet = new Set(), includeGeometry = false, allowArctic = false } = {}
   ) {
-    const originGateways = selectGatewayPorts(originNode, { maxDistanceKm: 180, limit: 2 });
-    const destGateways = selectGatewayPorts(destNode, { maxDistanceKm: 220, limit: 4 });
+    const originGateways = selectGatewayPorts(originNode, { maxDistanceKm: 180, limit: 2, avoidSet });
+    const destGateways = selectGatewayPorts(destNode, { maxDistanceKm: 220, limit: 4, avoidSet });
     if (!originGateways.length || !destGateways.length) return [];
 
     // Expand coupled chokepoints if user blocked Suez or Bab-el-Mandeb

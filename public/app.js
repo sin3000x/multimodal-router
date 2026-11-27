@@ -61,7 +61,10 @@ let activeRouteId = null;
 let activeLeg = null;
 let cardAnchor = null;
 let cardOpen = false;
-let chokepointNameById = new Map();
+let routeCardPosition = null;
+const avoidNodes = new Map();
+let avoidPicker;
+let querySequence = 0;
 let compareModel = null;
 let compareTab = 'summary';
 let compareLayer = 'both';
@@ -98,6 +101,7 @@ let graphLinkCounts = null;
 let graphAirByNode = new Map();
 let graphLandByNode = new Map();
 let nodesRequest = null;
+let graphNodeCatalogRequest;
 let graphLinkRequests = {};
 let selectedGraphNode = null;
 let graphMarkerCache = null;
@@ -1106,23 +1110,32 @@ function routesIntersectBox(x, y, width, height, padding) {
 
 function positionRouteCard(width, height, color) {
   const card = document.getElementById('map-route-card');
-  const anchor = cardOpen ? routeCardAnchor(width, height) : null;
-  const visible = Boolean(cardOpen && anchor);
+  const anchor = cardOpen && !routeCardPosition ? routeCardAnchor(width, height) : null;
+  const visible = Boolean(cardOpen && (routeCardPosition || anchor));
   card.classList.toggle('hidden', !visible);
   if (!visible) return;
 
-  const [x, y] = anchor;
   const controls = document.querySelector('.map-controls');
   const minX = 8;
   const minY = controls.offsetTop + controls.offsetHeight + 6;
-  card.style.maxHeight = `${Math.min(340, Math.max(120, height - minY - 8))}px`;
+  card.style.maxHeight = `${Math.min(340, Math.max(0, height - minY - 8))}px`;
+  card.style.setProperty('--route-color', color);
 
   const { offsetWidth: cardWidth, offsetHeight: cardHeight } = card;
   const maxX = Math.max(minX, width - cardWidth - 8);
   const maxY = Math.max(minY, height - cardHeight - 8);
-  const gap = 12;
   const clampX = (value) => Math.max(minX, Math.min(maxX, value));
   const clampY = (value) => Math.max(minY, Math.min(maxY, value));
+  if (routeCardPosition) {
+    routeCardPosition.x = clampX(routeCardPosition.x);
+    routeCardPosition.y = clampY(routeCardPosition.y);
+    card.style.left = `${routeCardPosition.x}px`;
+    card.style.top = `${routeCardPosition.y}px`;
+    return;
+  }
+
+  const [x, y] = anchor;
+  const gap = 12;
   const centeredX = clampX(x - cardWidth / 2);
   const centeredY = clampY(y - cardHeight / 2);
   const candidates = [
@@ -1147,9 +1160,8 @@ function positionRouteCard(width, height, color) {
   }
 
   const [cardX, cardY] = position;
-  card.style.left = `${cardX + 1}px`;
-  card.style.top = `${cardY + 1}px`;
-  card.style.setProperty('--route-color', color);
+  card.style.left = `${cardX}px`;
+  card.style.top = `${cardY}px`;
 }
 
 function mapTargetAt(x, y, pointerType) {
@@ -1198,11 +1210,22 @@ function clearMapHover() {
   return changed;
 }
 
+function closeWaypointMenu() {
+  document.getElementById('waypoint-menu').classList.add('hidden');
+}
+
+function routeWaypointButton(id) {
+  return document.querySelector(`[data-avoid-waypoint="${CSS.escape(id)}"]`);
+}
+
 function initMapInteractions() {
   const canvas = document.getElementById('world-map');
   const tooltip = document.getElementById('map-tooltip');
   const panel = document.getElementById('map-panel');
   const stage = panel.querySelector('.map-stage');
+  const waypointMenu = document.getElementById('waypoint-menu');
+  const waypointMenuName = document.getElementById('waypoint-menu-name');
+  const waypointMenuAvoid = document.getElementById('waypoint-menu-avoid');
   let gesture = null;
   let pinchScale = null;
   const zoomInput = () => view === graphView ? GRAPH_ZOOM_INPUT : ROUTE_ZOOM_INPUT;
@@ -1229,7 +1252,8 @@ function initMapInteractions() {
       const role = waypoint.groups?.map((group) => NODE_GROUPS[group].label).join(' / ')
         || ROLE_LABELS[waypoint.role] || waypoint.type;
       const blockedSuffix = compareModel?.avoidSet.has(waypoint.id) ? ' · 已受阻' : '';
-      tooltip.textContent = `${nodeLabel(waypoint)} · ${role}${blockedSuffix}`;
+      const avoidHint = view === routeView && routeWaypointButton(waypoint.id)?.disabled === false ? ' · 右键避让' : '';
+      tooltip.textContent = `${nodeLabel(waypoint)} · ${role}${blockedSuffix}${avoidHint}`;
     } else {
       const prefix = target.route?.compareRole
         ? `[${COMPARE_ROLE_META[target.route.compareRole].label}] `
@@ -1243,6 +1267,7 @@ function initMapInteractions() {
   }
 
   function zoomAt(factor, x, y) {
+    closeWaypointMenu();
     const m = getCanvasMetrics();
     if (!m) return;
     const oldWorldPx = m.cssW * view.zoom;
@@ -1305,6 +1330,40 @@ function initMapInteractions() {
     canvas.setPointerCapture(e.pointerId);
   });
 
+  canvas.addEventListener('contextmenu', (event) => {
+    if (view !== routeView || !activeRouteId || !avoidPicker) return;
+    const { x, y } = cssPoint(event);
+    const waypoint = mapTargetAt(x, y, event.pointerType)?.wp;
+    const waypointButton = waypoint && routeWaypointButton(waypoint.id);
+    if (!waypointButton) return;
+
+    event.preventDefault();
+    clearMapHover();
+    waypointMenuName.textContent = nodeLabel(waypoint);
+    waypointMenuAvoid.disabled = waypointButton.disabled;
+    waypointMenuAvoid.textContent = avoidNodes.has(waypoint.id) ? '已加入避让' : '避让此节点';
+    waypointMenuAvoid.onclick = () => {
+      closeWaypointMenu();
+      if (avoidPicker.add(waypoint)) runQuery();
+    };
+    waypointMenu.classList.remove('hidden');
+    const rect = stage.getBoundingClientRect();
+    const left = event.clientX - rect.left - stage.clientLeft;
+    const top = event.clientY - rect.top - stage.clientTop;
+    waypointMenu.style.left = `${Math.max(6, Math.min(left, stage.clientWidth - waypointMenu.offsetWidth - 6))}px`;
+    waypointMenu.style.top = `${Math.max(6, Math.min(top, stage.clientHeight - waypointMenu.offsetHeight - 6))}px`;
+    (waypointMenuAvoid.disabled ? waypointMenu : waypointMenuAvoid).focus({ preventScroll: true });
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!waypointMenu.contains(event.target)) closeWaypointMenu();
+  });
+  waypointMenu.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeWaypointMenu();
+    document.getElementById('route-select').focus({ preventScroll: true });
+  });
+
   canvas.addEventListener('pointermove', (e) => {
     if (!e.isPrimary) return;
     const { x, y } = cssPoint(e);
@@ -1352,7 +1411,19 @@ function initMapInteractions() {
       }
       return;
     }
-    if (target?.leg) {
+    if (target?.wp) {
+      const button = routeWaypointButton(target.wp.id);
+      if (button) {
+        cardOpen = true;
+        const details = document.getElementById('card-waypoints');
+        details.open = true;
+        details.querySelector('.active')?.classList.remove('active');
+        button.closest('li').classList.add('active');
+        drawWorldMap(currentRoutes, activeRouteId);
+        button.scrollIntoView({ block: 'nearest' });
+        (button.disabled ? details.querySelector('summary') : button).focus({ preventScroll: true });
+      }
+    } else if (target?.leg) {
       const [px, py] = target.anchor;
       const worldPx = canvas.clientWidth * view.zoom;
       const anchor = [
@@ -1390,6 +1461,7 @@ function initMapInteractions() {
   }
   document.getElementById('fit-route-btn').onclick = fitSelectedRoute;
   document.getElementById('reset-zoom-btn').onclick = () => {
+    closeWaypointMenu();
     view.zoom = 1;
     view.centerMx = 0.5;
     view.centerMy = DEFAULT_CENTER_MY;
@@ -1398,21 +1470,57 @@ function initMapInteractions() {
     drawWorldMap(currentRoutes, activeRouteId);
   };
 
+  const routeCard = document.getElementById('map-route-card');
+  const cardHandle = routeCard.querySelector('.card-head');
+  let cardDrag = null;
+
+  cardHandle.addEventListener('pointerdown', (event) => {
+    if (!event.isPrimary || event.button !== 0 || event.target.closest('button')) return;
+    const { x, y } = cssPoint(event);
+    cardDrag = {
+      id: event.pointerId,
+      offsetX: x - routeCard.offsetLeft,
+      offsetY: y - routeCard.offsetTop,
+    };
+    cardHandle.setPointerCapture(event.pointerId);
+    cardHandle.classList.add('dragging');
+  });
+
+  cardHandle.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== cardDrag?.id) return;
+    const { x, y } = cssPoint(event);
+    routeCardPosition = { x: x - cardDrag.offsetX, y: y - cardDrag.offsetY };
+    drawWorldMap(currentRoutes, activeRouteId);
+  });
+
+  function finishCardDrag(event) {
+    if (event.pointerId !== cardDrag?.id) return;
+    cardDrag = null;
+    cardHandle.classList.remove('dragging');
+  }
+
+  cardHandle.addEventListener('pointerup', finishCardDrag);
+  cardHandle.addEventListener('pointercancel', finishCardDrag);
+  cardHandle.addEventListener('lostpointercapture', finishCardDrag);
+
   const routeSelect = document.getElementById('route-select');
   routeSelect.onchange = () => {
     selectRoute(routeSelect.value);
-    if (document.getElementById('map-route-card').classList.contains('hidden')) {
+    if (routeCard.classList.contains('hidden')) {
       fitSelectedRoute();
     }
   };
   document.getElementById('close-route-card').onclick = () => {
     cardOpen = false;
+    routeCardPosition = null;
     resizeMap();
     routeSelect.focus({ preventScroll: true });
   };
   document.getElementById('card-legs').ontoggle = () => drawWorldMap(currentRoutes, activeRouteId);
+  document.getElementById('card-waypoints').ontoggle = () => drawWorldMap(currentRoutes, activeRouteId);
 
   function resizeMap() {
+    closeWaypointMenu();
     clampView();
     clearMapHover();
     drawWorldMap(currentRoutes, activeRouteId);
@@ -1556,10 +1664,13 @@ function renderGraphNodeCard(node) {
   aliasesEl.textContent = aliases.length ? `别名：${aliases.slice(0, 5).join(' / ')}` : '';
 
   const isPassage = node.groups.includes('passage');
-  const hasAvoidOption = Boolean(document.querySelector(`#chokepoint-list input[value="${CSS.escape(node.id)}"]`));
+  const avoidButton = document.getElementById('graph-set-avoid');
+  const hasAvoidOption = avoidPicker && !isQueryEndpoint(node.id);
   document.getElementById('graph-set-from').classList.toggle('hidden', isPassage);
   document.getElementById('graph-set-to').classList.toggle('hidden', isPassage);
-  document.getElementById('graph-set-avoid').classList.toggle('hidden', !hasAvoidOption);
+  avoidButton.classList.toggle('hidden', !hasAvoidOption);
+  avoidButton.disabled = avoidNodes.has(node.id);
+  avoidButton.textContent = avoidButton.disabled ? '已加入避让' : '避让此节点并计算';
   document.getElementById('graph-endpoints').classList.toggle('hidden', isPassage && !hasAvoidOption);
 }
 
@@ -1753,6 +1864,7 @@ function updateGraphSearch() {
 
 function setMapView(nextView) {
   if (view === nextView) return;
+  closeWaypointMenu();
   view = nextView;
   const isGraph = view === graphView;
   document.getElementById('map-panel').dataset.view = isGraph ? 'graph' : 'routes';
@@ -1768,6 +1880,14 @@ function setMapView(nextView) {
   drawWorldMap(currentRoutes, activeRouteId);
 }
 
+function loadGraphNodeCatalog() {
+  graphNodeCatalogRequest ??= fetchJson('/v1/graph/nodes').catch((error) => {
+    graphNodeCatalogRequest = null;
+    throw error;
+  });
+  return graphNodeCatalogRequest;
+}
+
 function initNodeGraph() {
   const status = document.getElementById('graph-status');
   const search = document.getElementById('graph-search');
@@ -1780,7 +1900,7 @@ function initNodeGraph() {
     setMapView(graphView);
     if (graphNodes || nodesRequest) return;
     status.textContent = '正在加载节点…';
-    nodesRequest = fetchJson('/v1/graph/nodes');
+    nodesRequest = loadGraphNodeCatalog();
     try {
       const { nodes } = await nodesRequest;
       graphNodes = nodes.map((node) => ({
@@ -1852,11 +1972,7 @@ function initNodeGraph() {
     search.focus();
   };
   document.getElementById('graph-set-avoid').onclick = () => {
-    if (!selectedGraphNode) return;
-    const checkbox = document.querySelector(`#chokepoint-list input[value="${CSS.escape(selectedGraphNode.id)}"]`);
-    if (!checkbox) return;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    if (!selectedGraphNode || !avoidPicker?.add(selectedGraphNode)) return;
     setMapView(routeView);
     const panel = document.getElementById('map-panel');
     if (document.fullscreenElement === panel || panel.classList.contains('map-maximized')) {
@@ -1886,7 +2002,11 @@ function selectedModes() {
 }
 
 function selectedAvoid() {
-  return [...document.querySelectorAll('input[name="avoid"]:checked')].map((el) => el.value);
+  return [...avoidNodes.keys()].filter((id) => !isQueryEndpoint(id));
+}
+
+function isQueryEndpoint(id) {
+  return endpointPickers.from.value === id || endpointPickers.to.value === id;
 }
 
 function focusCompareRoute(routeId) {
@@ -1899,6 +2019,8 @@ function focusCompareRoute(routeId) {
 }
 
 function selectRoute(routeId, leg = null, anchor = null) {
+  closeWaypointMenu();
+  if (routeId !== activeRouteId) routeCardPosition = null;
   activeRouteId = routeId;
   activeLeg = leg;
   cardAnchor = anchor;
@@ -1955,7 +2077,7 @@ function renderRouteCard(route, leg) {
     compareBar.classList.remove('hidden');
   } else if (compareModel && route.compareRole === 'baseline-affected') {
     const info = document.createElement('span');
-    info.textContent = route.pairedRouteId ? '经过受阻咽喉' : '经过受阻咽喉 · 该方式绕行后无可用方案';
+    info.textContent = route.pairedRouteId ? '经过避让点' : '经过避让点 · 当前无对应绕行方案';
     compareBar.appendChild(info);
     if (route.pairedRouteId) {
       const btn = document.createElement('button');
@@ -1991,6 +2113,27 @@ function renderRouteCard(route, leg) {
   byId('card-chips').replaceChildren(...chips);
   byId('card-chips').classList.toggle('hidden', !chips.length);
 
+  const waypoints = (route.waypoints ?? []).filter((wp) => wp.role !== 'origin' && wp.role !== 'destination');
+  const waypointRows = waypoints.map((wp) => {
+    const row = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = nodeLabel(wp);
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'map-btn map-btn-wide';
+    button.dataset.avoidWaypoint = wp.id;
+    button.onclick = () => {
+      if (avoidPicker.add(wp)) runQuery();
+    };
+    row.append(name, button);
+    return row;
+  });
+  byId('card-waypoint-list').replaceChildren(...waypointRows);
+  byId('card-waypoint-summary').textContent = `途经节点（${waypoints.length}）`;
+  byId('card-waypoints').open = false;
+  byId('card-waypoints').classList.toggle('hidden', !waypoints.length);
+  syncWaypointAvoidButtons();
+
   const legs = route.legs.map((item) => {
     const row = document.createElement('li');
     row.textContent = legSummary(item);
@@ -2000,6 +2143,17 @@ function renderRouteCard(route, leg) {
   byId('card-legs').open = false;
   byId('card-legs').classList.toggle('hidden', !legs.length);
   byId('map-route-card').scrollTop = 0;
+}
+
+function syncWaypointAvoidButtons() {
+  for (const button of document.querySelectorAll('[data-avoid-waypoint]')) {
+    const id = button.dataset.avoidWaypoint;
+    const selected = avoidNodes.has(id);
+    button.textContent = selected ? '已选避让' : '避让';
+    button.title = selected ? '已加入避让' : '避让此节点并计算';
+    button.setAttribute('aria-label', `${button.title} ${id}`);
+    button.disabled = selected || isQueryEndpoint(id);
+  }
 }
 
 function populateRouteSelect(routes) {
@@ -2113,7 +2267,7 @@ function renderComparePanel() {
 
   const notice = document.getElementById('compare-notice');
   if (!compareModel.hasAvoid) {
-    notice.textContent = '未勾选受阻咽喉/空域：当前基线与绕行方案相同，请在左侧勾选受阻咽喉（如苏伊士运河、霍尔木兹海峡）后重新对比。';
+    notice.textContent = '请在左侧选择要避让的节点或通道，再计算绕行对比。';
     notice.classList.remove('hidden');
   } else {
     notice.classList.add('hidden');
@@ -2285,7 +2439,7 @@ function renderComparePanel() {
       tdDelta.textContent = `${formatDeltaDays(route.deltaDays)} / ${formatCostMultiplier(route.costMultiplier)}`;
     } else if (route.compareRole === 'baseline-affected') {
       tdDelta.className = 'num route-cell-empty';
-      tdDelta.textContent = '经过受阻咽喉';
+      tdDelta.textContent = '经过避让点';
     } else {
       tdDelta.className = 'num delta-flat';
       tdDelta.textContent = '无变化';
@@ -2320,9 +2474,9 @@ function renderRoutes(routes, { initialRouteId = null } = {}) {
 }
 
 function updateActionButton() {
-  const avoidCount = selectedAvoid().length;
+  const avoidCount = avoidNodes.size;
   document.getElementById('run-btn').textContent =
-    avoidCount > 0 ? '分析绕行影响（基线 vs 绕行）' : '计算多式联运路径';
+    selectedAvoid().length > 0 ? '分析绕行影响（基线 vs 绕行）' : '计算多式联运路径';
   document.getElementById('avoid-meta').classList.toggle('hidden', avoidCount === 0);
   if (avoidCount > 0) {
     document.getElementById('avoid-count').textContent = `已选 ${avoidCount} 项`;
@@ -2330,78 +2484,139 @@ function updateActionButton() {
 }
 
 function initAvoidPicker(chokepoints) {
-  const list = document.getElementById('chokepoint-list');
+  const list = document.getElementById('avoid-options');
   const search = document.getElementById('avoid-search');
   const filters = [...document.querySelectorAll('[data-avoid-type]')];
   const selected = document.getElementById('avoid-selected');
   const toggleResults = document.getElementById('toggle-avoid-results');
   const clear = document.getElementById('clear-avoid-btn');
-  const empty = document.getElementById('avoid-empty');
+  const status = document.getElementById('avoid-results-status');
+  const reload = document.getElementById('reload-avoid-nodes');
+  const prev = document.getElementById('avoid-prev');
+  const next = document.getElementById('avoid-next');
+  const pageSize = 25;
+  const catalog = new Map();
   const sorted = [...chokepoints].sort(
     (a, b) => Number(KEY_AVOID_IDS.has(b.id)) - Number(KEY_AVOID_IDS.has(a.id)) || b.affectedLaneCount - a.affectedLaneCount
   );
-  const options = sorted.map((cp) => {
-    const row = document.createElement('div');
-    row.className = 'cp-item';
-    const label = document.createElement('label');
-    const checkbox = document.createElement('input');
-    checkbox.type = 'checkbox';
-    checkbox.name = 'avoid';
-    checkbox.value = cp.id;
-    label.append(checkbox, cp.name_zh);
-    const count = document.createElement('span');
-    count.className = 'cp-count';
-    count.textContent = `${cp.affectedLaneCount} 线`;
-    row.append(label, count);
-    list.append(row);
-
-    const chip = document.createElement('button');
-    chip.type = 'button';
-    chip.className = 'avoid-chip hidden';
-    chip.textContent = `${cp.name_zh} ×`;
-    chip.setAttribute('aria-label', `移除${cp.name_zh}`);
-    chip.onclick = () => {
-      checkbox.checked = false;
-      syncSelection();
-      (selected.querySelector('button:not(.hidden)') ?? search).focus();
-    };
-    selected.append(chip);
-
-    return {
-      row, checkbox, chip,
-      type: cp.type === 'airspace' ? 'air' : 'sea',
-      searchText: [cp.name_zh, cp.name_en, cp.id].join(' ').toLowerCase(),
-    };
-  });
+  for (const node of sorted) register(node, node.type === 'airspace' ? 'air' : 'sea');
   let activeType = '';
-  let visibleOptions = options;
+  let loadStatus = '正在加载节点…';
+  let matches = [];
+  let pageOptions = [];
+  let page = 0;
 
-  function syncBulkButton() {
-    toggleResults.disabled = visibleOptions.length === 0;
-    const allSelected = visibleOptions.length > 0 && visibleOptions.every(({ checkbox }) => checkbox.checked);
-    toggleResults.textContent = allSelected ? '取消全选结果' : '全选结果';
+  function register(node, type) {
+    if (catalog.has(node.id)) return;
+    const searchText = [
+      node.id, node.code, node.name_zh, node.name_en, NODE_SHORT_NAMES[node.id], ...(node.aliases ?? []),
+    ].filter(Boolean).join(' ').normalize('NFKC').toLowerCase();
+    catalog.set(node.id, { node, type, searchText });
+  }
+
+  function setOption(node, checked) {
+    if (checked) avoidNodes.set(node.id, catalog.get(node.id)?.node ?? node);
+    else avoidNodes.delete(node.id);
+  }
+
+  function add(node) {
+    if (avoidNodes.has(node.id) || isQueryEndpoint(node.id)) return false;
+    setOption(node, true);
+    syncSelection();
+    return true;
+  }
+
+  function syncPage() {
+    for (const { node, checkbox } of pageOptions) {
+      checkbox.checked = avoidNodes.has(node.id);
+      checkbox.disabled = isQueryEndpoint(node.id);
+      checkbox.title = checkbox.disabled ? '当前查询的起点或终点' : '';
+    }
+    const eligible = pageOptions.filter(({ checkbox }) => !checkbox.disabled);
+    toggleResults.disabled = !eligible.length;
+    const allSelected = eligible.length && eligible.every(({ checkbox }) => checkbox.checked);
+    toggleResults.textContent = allSelected ? '取消本页全选' : '全选本页';
   }
 
   function syncSelection() {
-    for (const { checkbox, chip } of options) {
-      chip.classList.toggle('hidden', !checkbox.checked);
-    }
-    syncBulkButton();
+    syncPage();
+    selected.replaceChildren(...[...avoidNodes.values()].map((node) => {
+      const chip = document.createElement('button');
+      const name = node.name_zh || nodeLabel(node);
+      chip.type = 'button';
+      chip.className = 'avoid-chip';
+      chip.textContent = `${name} ×`;
+      chip.setAttribute('aria-label', `移除${name}`);
+      chip.onclick = () => {
+        setOption(node, false);
+        syncSelection();
+        (selected.querySelector('button') ?? search).focus();
+      };
+      return chip;
+    }));
     updateActionButton();
+    syncWaypointAvoidButtons();
+  }
+
+  function renderPage() {
+    const start = page * pageSize;
+    const end = Math.min(start + pageSize, matches.length);
+    pageOptions = matches.slice(start, end).map(({ node, type }) => {
+      const row = document.createElement('div');
+      row.className = 'cp-item';
+      const label = document.createElement('label');
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.name = 'avoid';
+      checkbox.value = node.id;
+      label.append(checkbox, nodeLabel(node));
+      row.append(label);
+
+      const detail = document.createElement('span');
+      detail.className = 'cp-count';
+      detail.textContent = type === 'node'
+        ? nodeGroups(node).map((group) => NODE_GROUPS[group].label).join(' / ')
+        : `${node.affectedLaneCount ?? 0} 线`;
+      row.append(detail);
+      return { row, node, checkbox };
+    });
+    list.replaceChildren(...pageOptions.map(({ row }) => row));
+    list.scrollTop = 0;
+    const count = matches.length
+      ? `${start + 1}–${end} / ${matches.length.toLocaleString('zh-CN')} 项`
+      : '无匹配项';
+    status.textContent = activeType === 'sea' || activeType === 'air' || !loadStatus
+      ? count : `${loadStatus} · ${count}`;
+    prev.disabled = page === 0;
+    next.disabled = end >= matches.length;
+    syncPage();
   }
 
   function applyFilters() {
-    const terms = search.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
-    visibleOptions = [];
-    for (const option of options) {
-      const matches = (!activeType || activeType === option.type) &&
-        terms.every((term) => option.searchText.includes(term));
-      option.row.classList.toggle('hidden', !matches);
-      if (matches) visibleOptions.push(option);
+    const terms = search.value.normalize('NFKC').toLowerCase().trim().split(/\s+/).filter(Boolean);
+    matches = [...catalog.values()].filter(({ type, searchText }) =>
+      (!activeType || activeType === type) && terms.every((term) => searchText.includes(term))
+    );
+    page = 0;
+    renderPage();
+  }
+
+  async function loadNodes() {
+    loadStatus = '正在加载节点…';
+    reload.classList.add('hidden');
+    renderPage();
+    try {
+      const { nodes } = await loadGraphNodeCatalog();
+      for (const node of nodes) {
+        register(node, node.type === 'airspace' ? 'air' : node.marnetPassage ? 'sea' : 'node');
+      }
+      loadStatus = '';
+      applyFilters();
+    } catch {
+      loadStatus = '节点加载失败';
+      reload.classList.remove('hidden');
+      renderPage();
     }
-    empty.classList.toggle('hidden', visibleOptions.length > 0);
-    list.scrollTop = 0;
-    syncBulkButton();
   }
 
   for (const button of filters) {
@@ -2414,20 +2629,46 @@ function initAvoidPicker(chokepoints) {
     };
   }
   search.addEventListener('input', applyFilters);
-  list.addEventListener('change', syncSelection);
+  prev.onclick = () => { page--; renderPage(); };
+  next.onclick = () => { page++; renderPage(); };
+  reload.onclick = loadNodes;
+  for (const id of ['from-input', 'to-input']) {
+    document.getElementById(id).addEventListener('input', syncPage);
+  }
+  list.addEventListener('change', ({ target }) => {
+    const option = catalog.get(target.value);
+    if (!option) return;
+    if (isQueryEndpoint(option.node.id)) {
+      syncPage();
+      return;
+    }
+    setOption(option.node, target.checked);
+    syncSelection();
+  });
   toggleResults.onclick = () => {
-    const checked = visibleOptions.some(({ checkbox }) => !checkbox.checked);
-    for (const { checkbox } of visibleOptions) checkbox.checked = checked;
+    const eligible = pageOptions.filter(({ node }) => !isQueryEndpoint(node.id));
+    const checked = eligible.some(({ checkbox }) => !checkbox.checked);
+    for (const { node } of eligible) setOption(node, checked);
     syncSelection();
   };
   clear.onclick = () => {
-    for (const { checkbox } of options) checkbox.checked = false;
+    avoidNodes.clear();
     syncSelection();
     search.focus();
     runQuery();
   };
   applyFilters();
   syncSelection();
+  loadNodes();
+  return {
+    add,
+    excludeEndpoints(origin, destination) {
+      const removedOrigin = avoidNodes.delete(origin.id);
+      const removedDestination = avoidNodes.delete(destination.id);
+      if (removedOrigin || removedDestination) syncSelection();
+      else syncPage();
+    },
+  };
 }
 
 function getRoutePayload() {
@@ -2442,17 +2683,23 @@ function getRoutePayload() {
 }
 
 async function runQuery() {
+  const queryId = ++querySequence;
   setMapView(routeView);
   const payload = getRoutePayload();
   const { from, to, avoid } = payload;
   const summary = document.getElementById('route-summary');
   for (const picker of Object.values(endpointPickers)) picker.close();
+  closeWaypointMenu();
   if (!from || !to) {
     summary.textContent = `请输入${!from ? '起运地' : '目的地'}`;
     document.getElementById(`${!from ? 'from' : 'to'}-input`).focus();
     return;
   }
   const isCompare = avoid.length > 0;
+  const avoidNames = new Map(avoid.map((id) => {
+    const node = avoidNodes.get(id);
+    return [id, node.name_zh || nodeLabel(node)];
+  }));
 
   const endpoint = isCompare ? '/v1/routes/compare' : '/v1/routes';
   let data;
@@ -2463,6 +2710,7 @@ async function runQuery() {
       body: JSON.stringify(payload),
     });
   } catch (error) {
+    if (queryId !== querySequence) return;
     if (error.message.startsWith('Unknown origin node:')) {
       summary.textContent = `未找到起运地「${from}」，可输入地点名并从候选中选择`;
     } else if (error.message.startsWith('Unknown destination node:')) {
@@ -2473,7 +2721,9 @@ async function runQuery() {
     return;
   }
 
+  if (queryId !== querySequence) return;
   currentEndpoints = { origin: data.origin, destination: data.destination };
+  avoidPicker.excludeEndpoints(data.origin, data.destination);
 
   const badge = document.getElementById('cache-badge');
   const c = data.meta?.cache;
@@ -2482,19 +2732,17 @@ async function runQuery() {
     badge.className = `cache-badge${c.hit ? ' hit' : ''}`;
   }
 
-  if (isCompare) {
-    compareModel = buildCompareModel(data, chokepointNameById);
+  if (isCompare && data.avoid.length) {
+    compareModel = buildCompareModel(data, avoidNames);
     compareLayer = 'both';
     compareTab = 'summary';
     compareCollapsed = false;
     const routes = compareModel.getRoutes(compareLayer);
-    summary.textContent = `${data.origin.name_zh} → ${data.destination.name_zh} · 基线 vs 绕行对比${
-      compareModel.hasAvoid ? `（受阻：${compareModel.avoidNames.join('、')}）` : '（未勾选受阻咽喉）'
-    }`;
+    summary.textContent = `${data.origin.name_zh} → ${data.destination.name_zh} · 基线 vs 绕行对比（避让：${compareModel.avoidNames.join('、')}）`;
     renderRoutes(routes, { initialRouteId: compareModel.defaultRouteId(compareLayer) });
   } else {
     compareModel = null;
-    const routes = data.routes || [];
+    const routes = data.routes ?? data.baseline ?? [];
     summary.textContent = `${data.origin.name_zh} → ${data.destination.name_zh} · 共 ${routes.length} 条评估路径`;
     renderRoutes(routes);
   }
@@ -2521,8 +2769,7 @@ async function init() {
     .catch((err) => console.warn('Failed to load basemap:', err));
 
   const cpRes = await fetchJson('/v1/chokepoints');
-  chokepointNameById = new Map(cpRes.chokepoints.map((cp) => [cp.id, cp.name_zh]));
-  initAvoidPicker(cpRes.chokepoints);
+  avoidPicker = initAvoidPicker(cpRes.chokepoints);
 
   for (const btn of document.querySelectorAll('.preset-btn')) {
     btn.onclick = () => {

@@ -273,7 +273,7 @@ body {
 
 .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; }
 .avoid-selected { display: flex; flex-wrap: wrap; gap: 4px; max-height: 90px; overflow: auto; margin-bottom: 8px; }
-.avoid-selected:not(:has(.avoid-chip:not(.hidden))) { display: none; }
+.avoid-selected:empty { display: none; }
 .avoid-chip {
   background: var(--danger-soft);
   color: var(--danger);
@@ -289,10 +289,12 @@ body {
 .avoid-toolbar { justify-content: space-between; margin-bottom: 8px; }
 .avoid-filters .map-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .avoid-toolbar .link-btn:disabled { color: var(--muted); cursor: default; text-decoration: none; }
-.avoid-empty { margin: 0; color: var(--muted); }
-.chokepoint-list { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; font-size: 12px; }
+.avoid-options { display: flex; flex-direction: column; gap: 6px; max-height: 210px; overflow-y: auto; font-size: 12px; }
+.avoid-pagination { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+#avoid-results-status { margin-right: auto; color: var(--muted); font-size: 11px; }
 .cp-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .cp-item label { display: flex; flex: 1; align-items: center; gap: 6px; cursor: pointer; }
+.cp-item label:has(input:disabled) { color: var(--muted); cursor: default; }
 .cp-count { flex: none; color: var(--muted); font-size: 11px; }
 
 .actions { display: flex; flex-direction: column; gap: 8px; }
@@ -548,6 +550,23 @@ body {
   overflow-wrap: anywhere;
   z-index: 4;
 }
+
+.waypoint-menu {
+  position: absolute;
+  z-index: 7;
+  display: grid;
+  gap: 6px;
+  max-width: min(240px, calc(100% - 12px));
+  padding: 7px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.22);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.waypoint-menu button { height: auto; min-height: 25px; text-align: left; padding: 5px 7px; }
 
 .route-picker {
   display: flex;
@@ -911,6 +930,10 @@ body {
 
 .card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
 .card-head button { flex: none; margin-left: auto; }
+#map-route-card { max-width: calc(100% - 16px); }
+#map-route-card .card-head { cursor: grab; touch-action: none; user-select: none; }
+#map-route-card .card-head.dragging { cursor: grabbing; }
+.card-grip { flex: none; color: var(--muted); }
 .graph-card { left: 10px; bottom: 10px; width: 296px; font-size: 12px; }
 .graph-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 .graph-badge {
@@ -958,6 +981,11 @@ body {
 .chip.delta { border-color: var(--road); color: var(--road); }
 
 .map-route-card summary { font-size: 11px; cursor: pointer; }
+.card-waypoints { margin-bottom: 6px; }
+#card-waypoint-list { display: grid; gap: 3px; margin: 4px 0 0; padding: 0; list-style: none; }
+#card-waypoint-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; padding: 3px 4px; }
+#card-waypoint-list li.active { background: var(--surface-hover); border-radius: 4px; }
+#card-waypoint-list button { flex: none; }
 .legs { font-size: 11px; color: var(--muted); margin: 5px 0 0; padding-left: 16px; }
 .legs li + li { margin-top: 3px; }
 

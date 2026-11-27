@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRouter } from '../src/engine/router.mjs';
+import { createRoadRouter } from '../src/engine/road-router.mjs';
 import { createRouteCache } from '../src/cache/route-cache.mjs';
 import { crossesOpenSea } from '../src/engine/land-mask.mjs';
 
@@ -161,6 +162,51 @@ test('Airspace avoidance on AS_RUSSIA produces non-Russian hub routing for SZX -
       `Route ${r.routeId} still crossed AS_RUSSIA`
     );
   }
+});
+
+test('Node avoidance flags affected baselines and reroutes gateways and land crossings', () => {
+  const cases = [
+    { mode: 'sea', to: 'NLAMS', id: 'NLRTM' },
+    { mode: 'air', to: 'NLAMS', id: 'SZX' },
+    { mode: 'rail', to: 'NLAMS', id: 'CNALA' },
+    { mode: 'road', to: 'HKHKG', id: 'BORDER_SZ_HK' },
+  ];
+  const from = 'CNSZX';
+  for (const { mode, to, id } of cases) {
+    const result = router.compareDisruption({ from, to, modes: [mode], avoid: [from, to, id] });
+    assert.deepEqual(result.avoid, [id]);
+    const throughNode = result.baseline.filter((route) => route.nodeSequence.includes(id));
+    assert.ok(throughNode.length > 0, `Expected a baseline through ${id}`);
+    assert.deepEqual(result.affected.map((route) => route.routeId), throughNode.map((route) => route.routeId));
+    const alternatives = [...result.alternatives, ...result.landSubstitutions];
+    assert.ok(alternatives.length > 0, `Expected a route avoiding ${id}`);
+    for (const { nodeSequence } of alternatives) {
+      assert.equal(nodeSequence[0], from);
+      assert.equal(nodeSequence.at(-1), to);
+      assert.ok(!nodeSequence.includes(id), `Rerouted path still uses ${id}`);
+    }
+  }
+});
+
+test('Road network fallback exposes and avoids a traversed border vertex', () => {
+  const via = { id: 'BORDER', type: 'border', roadVertexId: 1 };
+  const from = { id: 'FROM', lon: 0, lat: 0, roadVertexId: 0 };
+  const to = { id: 'TO', lon: 2, lat: 0, roadVertexId: 2 };
+  const { findRoadPath } = createRoadRouter({
+    nodes: [from, via, to],
+    roadnet: {
+      vertices: [0, 1, 2].map((id) => ({ id, lon: id, lat: 0, comp: 0 })),
+      edges: [
+        { u: 0, v: 1, distanceKm: 112 },
+        { u: 1, v: 2, distanceKm: 112 },
+        { u: 0, v: 2, distanceKm: 260 },
+      ],
+    },
+  });
+  assert.deepEqual(findRoadPath(from, to).viaNodes, [via.id]);
+  const detour = findRoadPath(from, to, { avoidSet: new Set([via.id]) });
+  assert.deepEqual(detour.viaNodes, []);
+  assert.equal(detour.distanceKm, 260);
 });
 
 test('Two-tier cache serves memory hit and persists across fresh SQLite instances', async () => {

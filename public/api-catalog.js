@@ -419,7 +419,7 @@ export function initApiCatalog({ fetchJson, getRoutePayload, nodeGroups, groupLa
       codeCell.appendChild(codeBtn);
 
       const actions = row.insertCell();
-      const fields = dictionary.value === 'nodes' ? ['from', 'to'] : ['avoid'];
+      const fields = dictionary.value === 'nodes' ? ['from', 'to', 'avoid'] : ['avoid'];
       for (const field of fields) {
         const button = el('button', 'map-btn', field);
         button.type = 'button';

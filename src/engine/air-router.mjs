@@ -56,13 +56,14 @@ export function createAirRouter(graph) {
     return airAdj.get(aId)?.get(bId) ?? null;
   }
 
-  function selectGatewayAirports(node, { maxKm = 220, limit = 2 } = {}) {
+  function selectGatewayAirports(node, { maxKm = 220, limit = 2, avoidSet } = {}) {
     if (node.type === 'airport' || node.type === 'hub_airport') {
       if (hasAirnet && !airAdj.has(node.id)) return [];
       return [{ airport: node, drayageKm: 0 }];
     }
     const candidates = [];
     for (const ap of gatewayAirports) {
+      if (avoidSet?.has(ap.id)) continue;
       const d = haversineKm(node.lon, node.lat, ap.lon, ap.lat);
       if (d <= maxKm) {
         const routeBonus = Math.min(30, (ap.routeCount ?? 0) * 0.15);
@@ -308,8 +309,8 @@ export function createAirRouter(graph) {
   }
 
   return function routeAir(originNode, destNode, { avoidSet = new Set(), includeGeometry = false } = {}) {
-    const originAps = selectGatewayAirports(originNode, { maxKm: 200, limit: 2 });
-    const destAps = selectGatewayAirports(destNode, { maxKm: 220, limit: 2 });
+    const originAps = selectGatewayAirports(originNode, { maxKm: 200, limit: 2, avoidSet });
+    const destAps = selectGatewayAirports(destNode, { maxKm: 220, limit: 2, avoidSet });
     if (!originAps.length || !destAps.length) return [];
 
     const results = new Map();
@@ -321,7 +322,6 @@ export function createAirRouter(graph) {
     for (const oaCand of originAps) {
       for (const daCand of destAps) {
         if (oaCand.airport.id === daCand.airport.id) continue;
-        if (avoidSet.has(oaCand.airport.id) || avoidSet.has(daCand.airport.id)) continue;
 
         const directKm = haversineKm(oaCand.airport.lon, oaCand.airport.lat, daCand.airport.lon, daCand.airport.lat);
         if (directKm > 13500) continue;

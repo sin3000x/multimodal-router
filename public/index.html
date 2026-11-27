@@ -72,7 +72,7 @@
 
         <section class="panel">
           <div class="panel-head">
-            <h2>咽喉 / 空域受阻模拟 (Avoid)</h2>
+            <h2>避让设置 (Avoid)</h2>
             <div id="avoid-meta" class="avoid-meta hidden">
               <span id="avoid-count" class="avoid-count" aria-live="polite"></span>
               <button id="clear-avoid-btn" type="button" class="link-btn">清空</button>
@@ -80,19 +80,24 @@
           </div>
           <div id="avoid-selected" class="avoid-selected"></div>
           <div class="field avoid-search">
-            <input id="avoid-search" type="search" aria-label="搜索咽喉或空域"
-              placeholder="搜索中文名、英文名或 ID" autocomplete="off" spellcheck="false" />
+            <input id="avoid-search" type="search" aria-label="搜索可避让的节点、咽喉或空域"
+              placeholder="搜索节点、通道名称或 ID" autocomplete="off" spellcheck="false" />
           </div>
           <div class="avoid-toolbar">
             <div class="avoid-filters" role="group" aria-label="避让类型">
               <button type="button" class="map-btn" data-avoid-type="" aria-pressed="true">全部</button>
               <button type="button" class="map-btn" data-avoid-type="sea" aria-pressed="false">海运咽喉</button>
               <button type="button" class="map-btn" data-avoid-type="air" aria-pressed="false">空域</button>
+              <button type="button" class="map-btn" data-avoid-type="node" aria-pressed="false">节点</button>
             </div>
-            <button id="toggle-avoid-results" type="button" class="link-btn" disabled>全选结果</button>
+            <button id="toggle-avoid-results" type="button" class="link-btn" disabled>全选本页</button>
           </div>
-          <div id="chokepoint-list" class="chokepoint-list" role="group" aria-label="可选咽喉与空域">
-            <p id="avoid-empty" class="avoid-empty hidden" role="status">无匹配项</p>
+          <div id="avoid-options" class="avoid-options" role="group" aria-label="可避让节点与通道"></div>
+          <div class="avoid-pagination">
+            <span id="avoid-results-status" role="status">正在加载可避让项…</span>
+            <button id="reload-avoid-nodes" class="link-btn hidden" type="button">重试</button>
+            <button id="avoid-prev" class="map-btn" type="button" aria-label="上一页" disabled>‹</button>
+            <button id="avoid-next" class="map-btn" type="button" aria-label="下一页" disabled>›</button>
           </div>
         </section>
       </div>
@@ -118,7 +123,7 @@
                 <span class="legend-item"><i class="swatch swatch-rail"></i>铁路</span>
                 <span class="legend-item"><i class="swatch swatch-road"></i>公路</span>
                 <span class="legend-item compare-only"><i class="swatch swatch-baseline"></i>受阻基线</span>
-                <span class="legend-item compare-only"><i class="node-dot node-blocked"></i>受阻咽喉</span>
+                <span class="legend-item compare-only"><i class="node-dot node-blocked"></i>受阻节点 / 通道</span>
               </div>
               <span id="cache-badge" class="cache-badge">—</span>
             </div>
@@ -177,8 +182,13 @@
             </div>
             <div id="map-tooltip" class="map-tooltip hidden"></div>
           </div>
+          <div id="waypoint-menu" class="waypoint-menu hidden" role="group" aria-labelledby="waypoint-menu-name" tabindex="-1">
+            <strong id="waypoint-menu-name"></strong>
+            <button id="waypoint-menu-avoid" type="button" class="map-btn map-btn-wide">避让此节点</button>
+          </div>
           <article id="map-route-card" class="map-route-card route-view hidden" aria-label="选中路线详情">
-            <div class="card-head">
+            <div class="card-head" title="拖动路线详情卡片">
+              <span class="card-grip" aria-hidden="true">⠿</span>
               <span id="card-role" class="role-badge hidden"></span>
               <span id="card-mode" class="mode-tag"></span>
               <span id="card-likelihood" class="likelihood"></span>
@@ -193,6 +203,10 @@
             </div>
             <div id="card-compare-bar" class="card-compare-bar hidden"></div>
             <div id="card-chips" class="cp-chips hidden"></div>
+            <details id="card-waypoints" class="card-waypoints hidden">
+              <summary id="card-waypoint-summary">途经节点</summary>
+              <ul id="card-waypoint-list"></ul>
+            </details>
             <details id="card-legs">
               <summary>查看全程分段</summary>
               <ul id="card-leg-list" class="legs"></ul>
